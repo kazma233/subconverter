@@ -62,7 +62,7 @@ func withAccessLog(next http.Handler) http.Handler {
 
 // handleVersion 返回版本信息。
 func handleVersion(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "subconverter-go %s backend\n", Version)
+	fmt.Fprintf(w, "subconv %s backend\n", Version)
 }
 
 // handleIndex 返回内嵌的订阅链接生成页。"/" 是 ServeMux 的兜底模式，

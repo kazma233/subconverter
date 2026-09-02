@@ -1,4 +1,4 @@
-# subconverter
+# subconv
 
 代理订阅转换服务，**Go 实现**（原 C++ 版代码归档于 `archive/`，仅作参考不再构建）。
 面向个人自用场景：**输入机场订阅（vless/REALITY、anytls、ss、trojan、hysteria2、vmess），
@@ -8,8 +8,8 @@
 ## 快速开始（本地部署三行命令）
 
 ```bash
-docker build -t subconv-go .
-docker run -d --name subconv -p 25600:25600 subconv-go
+docker build -t subconv .
+docker run -d --name subconv -p 25600:25600 subconv
 curl "http://localhost:25600/sub?target=clash&url=<订阅地址URL编码>"
 ```
 
@@ -51,9 +51,9 @@ go build -o subconv . && ./subconv          # 默认监听 :25600
 
 ## 日志
 
-- **dev（默认）**：不配置任何环境变量，日志输出到控制台。
-- **部署**：设置环境变量 `LOG_FILE` 指定日志文件路径（追加写入，目录不存在自动创建），
-  `docker-compose.yml` 已配置 `LOG_FILE=/var/log/subconv/subconv.log` 并挂载到宿主机 `./logs`。
+- **dev（默认）**：`SUBCONV_ENV` 未设置或非 `production`，日志输出到控制台。
+- **部署**：设置 `SUBCONV_ENV=production`，日志写入 `LOG_FILE`（追加写入，目录不存在自动创建）；
+  未设置时默认 `/var/log/subconv/subconv.log`，与 compose 命名卷 `subconv-logs` 挂载点一致，无需配置。
 - 关键节点均记录：全量访问日志（方法 / 路径 / 状态码 / 耗时 / 来源 IP，含 404/405）、
   `/sub` 请求入口（target / url 段数 / config）、订阅与远程资产拉取、
   节点收集与过滤、渲染完成（节点数 / 输出字节 / 耗时）、各失败原因。

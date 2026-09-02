@@ -1,17 +1,20 @@
 services:
-  subconverter:
+  subconv:
     build: .
-    image: subconv-go:latest
-    container_name: subconverter
+    image: subconv:latest
+    container_name: subconv
     restart: unless-stopped
     # host 网络模式：容器直接使用宿主机网络栈，无端口映射开销
     # （macOS/Windows Docker Desktop 上 host 模式仅容器内互通，实际部署用 Linux）
     network_mode: host
     environment:
-      # 日志输出到文件（部署模式）；不设置 LOG_FILE 即 dev（控制台输出）
-      - LOG_FILE=/var/log/subconv/subconv.log
+      # production 模式日志写入 LOG_FILE，默认路径即命名卷挂载点，无需配置
+      - SUBCONV_ENV=production
       # 服务监听端口，默认 25600（host 网络模式下即宿主机监听端口）
       # - PORT=25600
     volumes:
-      # LOG_FILE 落盘到宿主机 ./logs
-      - ./logs:/var/log/subconv
+      # 日志写入 Docker 命名卷，存储位置由 Docker 管理，不绑定宿主机目录
+      - subconv-logs:/var/log/subconv
+
+volumes:
+  subconv-logs:

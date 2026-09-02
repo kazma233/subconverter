@@ -1,4 +1,4 @@
-# subconverter-go（Go 重写版）多阶段构建
+# subconv（Go 重写版）多阶段构建
 # builder：CGO_ENABLED=0 静态编译；运行层仅含静态二进制
 
 # ---------- 构建层 ----------

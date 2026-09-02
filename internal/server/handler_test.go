@@ -46,7 +46,7 @@ func TestVersionEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	want := "subconverter-go " + Version + " backend\n"
+	want := "subconv " + Version + " backend\n"
 	if got := rec.Body.String(); got != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}
