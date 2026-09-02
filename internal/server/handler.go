@@ -31,12 +31,29 @@ func NewHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/version", handleVersion)
 	mux.HandleFunc("/sub", handleSub)
+	mux.HandleFunc("/", handleIndex)
 	return mux
 }
 
 // handleVersion 返回版本信息。
 func handleVersion(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "subconverter-go %s backend\n", Version)
+}
+
+// handleIndex 返回内嵌的订阅链接生成页。"/" 是 ServeMux 的兜底模式，
+// 因此显式限定仅 / 与 /index.html 返回页面，其余未匹配路径保持 404。
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if p := r.URL.Path; p != "/" && p != "/index.html" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(indexHTML)
 }
 
 // subParams /sub 请求参数。

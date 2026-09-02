@@ -13,6 +13,10 @@ docker run -d --name subconv -p 25600:25600 subconv-go
 curl "http://localhost:25600/sub?target=clash&url=<订阅地址URL编码>"
 ```
 
+浏览器打开 `http://localhost:25600/` 可使用内置的订阅链接生成页
+（内嵌于二进制，无外部依赖）：选择 target、粘贴订阅地址/节点链接、挑选 ACL4SSR 外配置预设，
+实时生成并复制 `/sub` 链接。
+
 不带 Docker 直接运行（需 Go 1.25+，工作目录为仓库根）：
 
 ```bash

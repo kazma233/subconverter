@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>subconv · 订阅链接生成器</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23f2f5f7'/%3E%3Cpath d='M4 5l4 6 4-6' stroke='%230e9f6e' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<style>
+  /* 设计基调：终端/utilitarian —— 订阅转换面向的是配置文件，等宽字体贴合使用场景。
+     亮色主题；双色体系：accent(绿) = 结果与主操作，accent-2(青) = 品牌与交互引导，
+     亮底下两色均加深以保证文字对比度。页面随二进制 embed 分发，所有资源内联，无外部依赖。 */
+  :root {
+    --bg: #f2f5f7;
+    --panel: #ffffff;
+    --panel-2: #f7fafb;
+    --border: #d9e0e6;
+    --border-strong: #b9c5ce;
+    --text: #1d2833;
+    --muted: #5e6f7f;
+    --accent: #0e9f6e;
+    --accent-hi: #0bb781;
+    --accent-2: #0a7fc4;
+    --accent-ink: #ffffff;
+    --warn: #a15c07;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--text);
+    background: radial-gradient(circle at 1px 1px, rgba(20,40,60,.07) 1px, transparent 1.6px) 0 0 / 26px 26px, var(--bg);
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 30px 20px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 26px; }
+  .brand { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: .02em; color: var(--accent); }
+  .brand b { color: var(--accent-2); }
+  .brand-sub { color: var(--muted); font-size: 13px; }
+  .status { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--accent); animation: pulse 2.4s ease-out infinite; }
+  @keyframes pulse {
+    55% { box-shadow: 0 0 0 6px rgba(14,159,110,.2); }
+    100% { box-shadow: 0 0 0 8px rgba(14,159,110,0); }
+  }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 20px; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 22px; }
+  .result { position: sticky; top: 24px; }
+
+  .field { margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  label, .label {
+    display: block;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 7px;
+  }
+  input[type=text], select, textarea {
+    width: 100%;
+    font: inherit;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 9px 11px;
+    transition: border-color .15s;
+  }
+  textarea { resize: vertical; min-height: 92px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  /* 只读展示预设地址：弱化颜色、不可聚焦高亮，点击/聚焦全选方便复制 */
+  #configCustom[readonly] { color: var(--muted); cursor: default; user-select: all; }
+  #configCustom[readonly]:focus { border-color: var(--border); }
+  /* 原生下拉箭头在暗色下不可见，用两个三角拼一个 */
+  select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+  }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .mt { margin-top: 10px; }
+
+  .tip { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .tip.warn { color: var(--warn); }
+
+  #linkBox {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 12px 13px;
+    word-break: break-all;
+    min-height: 76px;
+    font-size: 13px;
+    user-select: all;
+  }
+  #linkBox.empty { border-left-color: var(--border-strong); color: var(--muted); user-select: text; }
+
+  .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: inherit; font-size: 13px;
+    color: var(--text); background: transparent;
+    border: 1px solid var(--border-strong); border-radius: 6px;
+    padding: 9px 16px; cursor: pointer; text-decoration: none;
+    transition: border-color .15s, background-color .15s, color .15s;
+  }
+  .btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--accent-2); color: var(--accent-2); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hi); color: var(--accent-ink); }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; pointer-events: none; }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
+
+  footer { margin-top: 30px; color: var(--muted); font-size: 12px; display: flex; gap: 18px; flex-wrap: wrap; }
+  footer a { color: var(--muted); }
+  footer a:hover { color: var(--accent-2); }
+
+  @media (max-width: 920px) {
+    .grid { grid-template-columns: 1fr; }
+    .result { position: static; }
+  }
+  @media (max-width: 560px) { .row2 { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) {
+    .dot.on { animation: none; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 class="brand">sub<b>conv</b></h1>
+    <span class="brand-sub">订阅链接生成器 · clash / loon</span>
+    <span class="status"><span class="dot" id="dot"></span><span id="ver">连接后端…</span></span>
+  </header>
+
+  <main class="grid">
+    <section class="panel" aria-label="订阅参数">
+      <form id="form" autocomplete="off">
+        <div class="field">
+          <label for="target">target · 输出格式</label>
+          <select id="target">
+            <option value="clash">clash（mihomo YAML）</option>
+            <option value="loon">loon（Loon conf）</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="url">url · 订阅地址 / 节点链接</label>
+          <textarea id="url" rows="4" placeholder="https://example.com/sub&#10;vless://…（每行一个，可混合）"></textarea>
+          <p class="tip">每行一段，多行自动用 | 合并；http(s) 订阅与节点链接可混合。</p>
+        </div>
+
+        <div class="field">
+          <label for="configPreset">config · 外配置</label>
+          <select id="configPreset">
+            <!-- 默认项 value 直接写完整 URL，须与 handler.go 的 defaultACLConfig 保持一致 -->
+            <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full.ini">默认 · ACL4SSR_Online_Full</option>
+            <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full_AdblockPlus.ini">Full_AdblockPlus · 去广告加强</option>
+            <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full_MultiMode.ini">Full_MultiMode · 多模式</option>
+            <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Mini.ini">Mini · 精简</option>
+            <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Mini_Fallback.ini">Mini_Fallback · 自动兜底</option>
+            <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini">Mini_MultiMode · 精简多模式</option>
+            <option value="custom">自定义 URL…</option>
+          </select>
+          <input type="text" id="configCustom" class="mt" readonly
+                 value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full.ini">
+          <p class="tip">预设地址只读展示（可选中复制）；选「自定义 URL…」后可编辑，留空 = 默认 Full。仅支持完整 http(s) URL。</p>
+        </div>
+
+        <div class="row2 field">
+          <div>
+            <label for="include">include · 保留正则</label>
+            <input type="text" id="include" placeholder="香港|日本">
+          </div>
+          <div>
+            <label for="exclude">exclude · 剔除正则</label>
+            <input type="text" id="exclude" placeholder="到期|流量">
+          </div>
+        </div>
+
+        <div class="row2 field">
+          <div>
+            <label for="ua">ua · 拉取 UA</label>
+            <input type="text" id="ua" placeholder="clash.meta（默认）">
+          </div>
+          <div>
+            <label for="filename">filename · 下载文件名</label>
+            <input type="text" id="filename" placeholder="config.yaml">
+          </div>
+        </div>
+
+        <p class="tip warn">正则为 Go RE2 语法：不支持 (?=…)、(?&lt;=…) lookahead 与反向引用。</p>
+      </form>
+    </section>
+
+    <aside class="panel result" aria-label="生成结果">
+      <div class="field">
+        <span class="label">生成的订阅链接</span>
+        <div id="linkBox" class="empty">填写 url 后自动生成…</div>
+        <div class="actions">
+          <button type="button" class="btn btn-primary" id="copyBtn" disabled>复制链接</button>
+          <a class="btn" id="openLink" target="_blank" rel="noopener" aria-disabled="true">打开 ↗</a>
+        </div>
+        <p class="tip" id="hint">链接基于当前站点地址生成，可直接粘贴进客户端。</p>
+      </div>
+      <noscript>
+        <p class="tip warn">本页依赖 JavaScript 生成链接；也可直接请求 /sub?target=clash&amp;url=…</p>
+      </noscript>
+    </aside>
+  </main>
+
+  <footer>
+    <span>GET <a href="/version">/version</a></span>
+    <span>GET /sub?target=clash|loon</span>
+  </footer>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const linkBox = $('linkBox');
+  const copyBtn = $('copyBtn');
+  const openLink = $('openLink');
+  const hint = $('hint');
+  let currentURL = '';
+
+  // filename 占位符跟随 target，减少一处手填
+  const filenameByTarget = { clash: 'config.yaml', loon: 'config.conf' };
+
+  function buildURL() {
+    const p = new URLSearchParams();
+    p.set('target', $('target').value);
+
+    // 多行输入按后端契约以 | 拼接（服务端按 | 分段拉取/解析）
+    const urls = $('url').value.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    if (!urls.length) return null;
+    p.set('url', urls.join('|'));
+
+    // config 直接取输入框当前值：预设时为只读展示的完整 URL，自定义时为用户输入
+    const config = $('configCustom').value.trim();
+    if (config) p.set('config', config);
+
+    for (const id of ['include', 'exclude', 'ua', 'filename']) {
+      const v = $(id).value.trim();
+      if (v) p.set(id, v);
+    }
+    return new URL('/sub?' + p.toString(), location.href).href;
+  }
+
+  function render() {
+    const url = buildURL();
+    currentURL = url || '';
+    if (url) {
+      linkBox.textContent = url;
+      linkBox.classList.remove('empty');
+      copyBtn.disabled = false;
+      openLink.href = url;
+      openLink.removeAttribute('aria-disabled');
+      hint.textContent = '已按后端参数编码；粘贴进 Clash/Loon 客户端即可订阅。';
+    } else {
+      linkBox.textContent = '填写 url 后自动生成…';
+      linkBox.classList.add('empty');
+      copyBtn.disabled = true;
+      openLink.removeAttribute('href');
+      openLink.setAttribute('aria-disabled', 'true');
+      hint.textContent = 'url 必填：订阅地址或节点链接至少填一行。';
+    }
+    $('filename').placeholder = filenameByTarget[$('target').value] + '（可选）';
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // 局域网 http（非安全上下文）没有 clipboard API，退回 execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { return document.execCommand('copy'); } finally { ta.remove(); }
+    }
+  }
+
+  copyBtn.addEventListener('click', async () => {
+    if (!currentURL) return;
+    const ok = await copyText(currentURL);
+    copyBtn.textContent = ok ? '已复制 ✓' : '复制失败';
+    setTimeout(() => { copyBtn.textContent = '复制链接'; }, 1600);
+  });
+
+  // 用户自定义的 config 输入在临时切换预设时保留，切回「自定义」时恢复
+  let customConfig = '';
+
+  // 预设 → 输入框只读展示对应完整 URL；自定义 → 可编辑
+  function syncConfigInput() {
+    const preset = $('configPreset').value;
+    const custom = preset === 'custom';
+    const input = $('configCustom');
+    input.readOnly = !custom;
+    input.value = custom ? customConfig : preset;
+    if (custom) input.focus();
+  }
+
+  // 只读态聚焦全选，方便直接复制预设地址
+  $('configCustom').addEventListener('focus', (e) => {
+    if (e.target.readOnly) e.target.select();
+  });
+
+  $('form').addEventListener('input', (e) => {
+    if (e.target.id === 'configCustom' && !e.target.readOnly) customConfig = e.target.value;
+    render();
+  });
+  $('configPreset').addEventListener('change', () => {
+    syncConfigInput();
+    render();
+  });
+
+  // 后端在线状态：拉 /version 成功点亮，失败保持灰点
+  fetch('/version')
+    .then(r => r.ok ? r.text() : Promise.reject(new Error('bad status')))
+    .then(t => { $('ver').textContent = t.trim(); $('dot').classList.add('on'); })
+    .catch(() => { $('ver').textContent = '后端不可达'; });
+
+  render();
+</script>
+</body>
+</html>

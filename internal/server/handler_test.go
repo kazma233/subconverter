@@ -338,3 +338,47 @@ func TestSubMethodNotAllowed(t *testing.T) {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
 }
+
+// TestIndexPage / 返回内嵌订阅链接生成页；未知路径 404；POST 405。
+func TestIndexPage(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	NewHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
+	}
+	body := rec.Body.String()
+	// 页面必须覆盖后端 /sub 的全部参数，防止页面与接口脱节
+	// （config 由预设下拉 + 自定义输入两个控件承担）
+	for _, marker := range []string{"target", "url", "configPreset", "configCustom", "include", "exclude", "ua", "filename"} {
+		if !strings.Contains(body, `id="`+marker+`"`) {
+			t.Errorf("页面缺少参数输入 id=%q", marker)
+		}
+	}
+	if !strings.Contains(body, "/sub") {
+		t.Error("页面应生成 /sub 链接")
+	}
+	// 默认预设须直接携带完整 URL（页面只读展示 + 生成链接都依赖它）
+	defaultACL := "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full.ini"
+	if !strings.Contains(body, `value="`+defaultACL+`"`) {
+		t.Errorf("默认外配置选项应携带完整 URL %s", defaultACL)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/not-exist", nil)
+	rec = httptest.NewRecorder()
+	NewHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("未知路径 status = %d, want 404", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	rec = httptest.NewRecorder()
+	NewHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST / status = %d, want 405", rec.Code)
+	}
+}
