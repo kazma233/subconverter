@@ -2,6 +2,8 @@ services:
   subconv:
     build: .
     image: subconv:latest
+    # 镜像仅由本地构建产生，registry 上不存在；禁止 compose 在镜像缺失时尝试拉取
+    pull_policy: build
     container_name: subconv
     restart: unless-stopped
     # host 网络模式：容器直接使用宿主机网络栈，无端口映射开销
