@@ -47,6 +47,8 @@ func FetchRemote(url string) (string, error) {
 	remoteCacheMu.Lock()
 	remoteCache[url] = content
 	remoteCacheMu.Unlock()
+	// 首次远程拉取才记录（缓存命中保持安静）；URL 为公开规则资产，可全量落日志
+	log.Printf("[fetch] 远程资产拉取 %s: %d字节", url, len(content))
 	return content, nil
 }
 

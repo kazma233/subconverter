@@ -7,6 +7,11 @@ services:
     # host 网络模式：容器直接使用宿主机网络栈，无端口映射开销
     # （macOS/Windows Docker Desktop 上 host 模式仅容器内互通，实际部署用 Linux）
     network_mode: host
-    # environment:
-    #   # 服务监听端口，默认 25600（host 网络模式下即宿主机监听端口）
-    #   # - PORT=25600
+    environment:
+      # 日志输出到文件（部署模式）；不设置 LOG_FILE 即 dev（控制台输出）
+      - LOG_FILE=/var/log/subconv/subconv.log
+      # 服务监听端口，默认 25600（host 网络模式下即宿主机监听端口）
+      # - PORT=25600
+    volumes:
+      # LOG_FILE 落盘到宿主机 ./logs
+      - ./logs:/var/log/subconv

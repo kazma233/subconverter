@@ -49,6 +49,16 @@ go build -o subconv . && ./subconv          # 默认监听 :25600
 /sub?target=clash&url=<订阅URL>&config=https%3A%2F%2Fraw.githubusercontent.com%2FACL4SSR%2FACL4SSR%2Frefs%2Fheads%2Fmaster%2FClash%2Fconfig%2FACL4SSR_Online_Mini.ini
 ```
 
+## 日志
+
+- **dev（默认）**：不配置任何环境变量，日志输出到控制台。
+- **部署**：设置环境变量 `LOG_FILE` 指定日志文件路径（追加写入，目录不存在自动创建），
+  `docker-compose.yml` 已配置 `LOG_FILE=/var/log/subconv/subconv.log` 并挂载到宿主机 `./logs`。
+- 关键节点均记录：全量访问日志（方法 / 路径 / 状态码 / 耗时 / 来源 IP，含 404/405）、
+  `/sub` 请求入口（target / url 段数 / config）、订阅与远程资产拉取、
+  节点收集与过滤、渲染完成（节点数 / 输出字节 / 耗时）、各失败原因。
+  订阅地址含 token 凭据，日志只记录 host 且不落任何 query 参数。
+
 ## 输入侧支持的协议
 
 | 协议        | 链接形态                                                    | 备注                       |

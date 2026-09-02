@@ -8,7 +8,9 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -47,13 +49,33 @@ func fetchWithClient(client *http.Client, url, ua string) (string, map[string]st
 	}
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		start := time.Now()
 		content, userinfo, err := doFetch(client, url, ua)
 		if err == nil {
+			log.Printf("[fetch] 订阅拉取成功 host=%s %d字节 耗时=%s", HostOf(url), len(content), time.Since(start))
 			return content, userinfo, nil
+		}
+		// 最终失败不打日志，由上层 handler 的错误日志统一记录；
+		// 错误文本需返回客户端原文，日志侧替换 URL 为 host 避免 token 落盘
+		if attempt < maxRetries {
+			log.Printf("[fetch] 订阅拉取失败（将重试）: %s", RedactURL(err.Error(), url))
 		}
 		lastErr = err
 	}
 	return "", nil, lastErr
+}
+
+// HostOf 提取 URL 的 host：订阅地址普遍携带 token 凭据，常规日志只落 host。
+func HostOf(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return "?"
+}
+
+// RedactURL 把文本中出现的指定 URL 替换为其 host，用于日志脱敏。
+func RedactURL(text, rawURL string) string {
+	return strings.ReplaceAll(text, rawURL, HostOf(rawURL))
 }
 
 // doFetch 单次拉取：请求构造 → 状态码校验 → 限长读取 → gzip 解压 → 头解析。

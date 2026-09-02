@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -336,6 +338,52 @@ func TestSubMethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+// TestAccessLog 全量访问日志：任意请求（含 404/405）都输出一行
+// 方法/路径/状态码/来源 IP，且不落 query（订阅地址含 token）。
+func TestAccessLog(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	h := NewHandler()
+
+	// 200 正常请求（httptest.NewRequest 默认 RemoteAddr 192.0.2.1:1234）
+	req := httptest.NewRequest(http.MethodGet, "/version", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	// 404 未匹配路径
+	req = httptest.NewRequest(http.MethodGet, "/not-exist", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"[http]", "GET /version 200", "GET /not-exist 404", "来源=192.0.2.1:1234"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("访问日志应包含 %q:\n%s", want, out)
+		}
+	}
+
+	// query 不得落日志（含订阅地址凭据）
+	req = httptest.NewRequest(http.MethodGet, "/sub?target=clash&url=https%3A%2F%2Ftoken-secret%40example.com%2Fsub", nil)
+	buf.Reset()
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	got := buf.String()
+	if strings.Contains(got, "token-secret") {
+		t.Errorf("访问日志泄露 query 凭据:\n%s", got)
+	}
+	if !strings.Contains(got, "GET /sub 400") {
+		t.Errorf("访问日志应记录 /sub 400:\n%s", got)
 	}
 }
 

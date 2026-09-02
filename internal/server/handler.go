@@ -7,8 +7,10 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"subconv/internal/fetch"
 	"subconv/internal/filter"
@@ -32,7 +34,30 @@ func NewHandler() http.Handler {
 	mux.HandleFunc("/version", handleVersion)
 	mux.HandleFunc("/sub", handleSub)
 	mux.HandleFunc("/", handleIndex)
-	return mux
+	return withAccessLog(mux)
+}
+
+// statusRecorder 记录响应状态码：handler 无返回值，需在 WriteHeader 时截获。
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// withAccessLog 全量访问日志：任意请求（含 404/405 与静态页）输出一行
+// 方法/路径/状态/耗时/来源 IP。只落 Path 不落 query——/sub 的 query
+// 携带订阅地址（含 token 凭据），IP 统一由本层记录，业务日志不再重复。
+func withAccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log.Printf("[http] %s %s %d %s 来源=%s", r.Method, r.URL.Path, rec.status, time.Since(start), r.RemoteAddr)
+	})
 }
 
 // handleVersion 返回版本信息。
@@ -82,6 +107,7 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	start := time.Now()
 	q := r.URL.Query()
 	params := subParams{
 		Target:   q.Get("target"),
@@ -97,27 +123,39 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	switch params.Target {
 	case "clash", "loon":
 	default:
+		log.Printf("[sub] 拒绝: 不支持的 target=%q", params.Target)
 		http.Error(w, "unsupported target: "+params.Target+"（仅支持 clash/loon）", http.StatusBadRequest)
 		return
 	}
 
 	if params.URL == "" {
+		log.Printf("[sub] 拒绝: 缺 url 参数")
 		http.Error(w, "missing url parameter", http.StatusBadRequest)
 		return
 	}
 
+	// 订阅地址含 token 等凭据，日志只记录段数，不落原始 URL；来源 IP 由访问日志层统一记录
+	log.Printf("[sub] 收到请求: target=%s url段数=%d config=%s",
+		params.Target, strings.Count(params.URL, "|")+1, configLabel(params.Config))
+
 	// 节点收集：| 分隔多段，节点链接与 http(s) 订阅地址混合
 	nodes, userinfo, err := collectNodes(params.URL, params.UA)
 	if err != nil {
+		// 错误文本需返回客户端原文；日志侧替换订阅段为 host，避免 token 凭据落盘
+		log.Printf("[sub] 失败: 节点收集错误 耗时=%s: %s", time.Since(start), redactURLs(err.Error(), params.URL))
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	log.Printf("[sub] 节点收集: %d 个", len(nodes))
 
 	// include/exclude 过滤
 	if params.Include != "" || params.Exclude != "" {
+		before := len(nodes)
 		nodes = filter.FilterNodes(nodes, params.Include, params.Exclude)
+		log.Printf("[sub] 过滤(include=%q exclude=%q): %d → %d", params.Include, params.Exclude, before, len(nodes))
 	}
 	if len(nodes) == 0 {
+		log.Printf("[sub] 失败: 过滤后无剩余节点")
 		http.Error(w, "no node left after include/exclude filter", http.StatusBadRequest)
 		return
 	}
@@ -129,11 +167,13 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	}
 	aclContent, err := loadExternalConfig(configName)
 	if err != nil {
+		log.Printf("[sub] 失败: 外配置加载错误 耗时=%s: %v", time.Since(start), err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	acl, err := rule.ParseINI(aclContent)
 	if err != nil {
+		log.Printf("[sub] 失败: 外配置 %s 解析错误: %v", configName, err)
 		http.Error(w, fmt.Sprintf("解析外配置 %s 失败: %v", configName, err), http.StatusBadRequest)
 		return
 	}
@@ -141,9 +181,12 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	// 渲染
 	output, err := render.Convert(params.Target, nodes, &render.Config{ACL: acl})
 	if err != nil {
+		log.Printf("[sub] 失败: 渲染错误 耗时=%s: %v", time.Since(start), err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("[sub] 完成: target=%s 节点=%d 输出=%d字节 耗时=%s",
+		params.Target, len(nodes), len(output), time.Since(start))
 
 	if len(userinfo) > 0 {
 		w.Header().Set("Subscription-UserInfo", formatUserinfo(userinfo))
@@ -157,6 +200,25 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment; filename="+params.Filename)
 	}
 	_, _ = w.Write([]byte(output))
+}
+
+// configLabel 日志用 config 描述：未显式指定时标为默认，便于区分来源。
+func configLabel(config string) string {
+	if config == "" {
+		return "默认(" + defaultACLConfig + ")"
+	}
+	return config
+}
+
+// redactURLs 把日志文本中出现的各订阅段 URL 替换为其 host（仅替换已知订阅段，
+// 外配置等公开资产 URL 不受影响），避免订阅地址携带的 token 凭据落日志。
+func redactURLs(text, urlParam string) string {
+	for _, part := range strings.Split(urlParam, "|") {
+		if part = strings.TrimSpace(part); isHTTPURL(part) {
+			text = fetch.RedactURL(text, part)
+		}
+	}
+	return text
 }
 
 // collectNodes 收集全部节点：url 参数按 | 分隔多段，每段可为节点链接或
