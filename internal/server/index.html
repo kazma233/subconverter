@@ -75,10 +75,8 @@
   }
   textarea { resize: vertical; min-height: 92px; }
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
-  /* 只读展示预设地址：弱化颜色、不可聚焦高亮，点击/聚焦全选方便复制 */
   #configCustom[readonly] { color: var(--muted); cursor: default; user-select: all; }
   #configCustom[readonly]:focus { border-color: var(--border); }
-  /* 原生下拉箭头在暗色下不可见，用两个三角拼一个 */
   select {
     appearance: none;
     background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
@@ -93,10 +91,23 @@
   .tip { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   .tip.warn { color: var(--warn); }
 
+  /* 高级选项折叠区 */
+  details.advanced { border-top: 1px solid var(--border); padding-top: 18px; margin-top: 18px; }
+  details.advanced > summary {
+    cursor: pointer; list-style: none;
+    font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 14px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  details.advanced > summary::-webkit-details-marker { display: none; }
+  details.advanced > summary::before {
+    content: '▸'; color: var(--border-strong); transition: transform .15s;
+  }
+  details.advanced[open] > summary::before { transform: rotate(90deg); }
+
   #linkBox {
     background: var(--panel-2);
     border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
     border-radius: 6px;
     padding: 12px 13px;
     word-break: break-all;
@@ -104,7 +115,7 @@
     font-size: 13px;
     user-select: all;
   }
-  #linkBox.empty { border-left-color: var(--border-strong); color: var(--muted); user-select: text; }
+  #linkBox.empty { color: var(--muted); user-select: text; }
 
   .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
   .btn {
@@ -142,7 +153,7 @@
 <div class="wrap">
   <header>
     <h1 class="brand">sub<b>conv</b></h1>
-    <span class="brand-sub">订阅链接生成器 · clash / loon</span>
+    <span class="brand-sub">订阅链接生成器 · clash / loon / sing-box</span>
     <span class="status"><span class="dot" id="dot"></span><span id="ver">连接后端…</span></span>
   </header>
 
@@ -154,6 +165,7 @@
           <select id="target">
             <option value="clash">clash（mihomo YAML）</option>
             <option value="loon">loon（Loon conf）</option>
+            <option value="singbox">sing-box（JSON）</option>
           </select>
         </div>
 
@@ -166,7 +178,6 @@
         <div class="field">
           <label for="configPreset">config · 外配置</label>
           <select id="configPreset">
-            <!-- 默认项 value 直接写完整 URL，须与 handler.go 的 defaultACLConfig 保持一致 -->
             <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full.ini">默认 · ACL4SSR_Online_Full</option>
             <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full_AdblockPlus.ini">Full_AdblockPlus · 去广告加强</option>
             <option value="https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full_MultiMode.ini">Full_MultiMode · 多模式</option>
@@ -203,6 +214,91 @@
         </div>
 
         <p class="tip warn">正则为 Go RE2 语法：不支持 (?=…)、(?&lt;=…) lookahead 与反向引用。</p>
+
+        <details class="advanced">
+          <summary>高级选项 · 节点处理与拉取</summary>
+
+          <div class="row2">
+            <div>
+              <label for="emoji">emoji · 国旗</label>
+              <select id="emoji">
+                <option value="">默认（不加）</option>
+                <option value="true">加国旗（去旧加新）</option>
+              </select>
+            </div>
+            <div>
+              <label for="list">list · 纯节点列表</label>
+              <select id="list">
+                <option value="">否（完整配置）</option>
+                <option value="true">只输出节点</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row2 mt">
+            <div>
+              <label for="udp">udp · UDP 转发</label>
+              <select id="udp">
+                <option value="">按节点自身</option>
+                <option value="true">全局开</option>
+                <option value="false">全局关</option>
+              </select>
+            </div>
+            <div>
+              <label for="tfo">tfo · TCP Fast Open</label>
+              <select id="tfo">
+                <option value="">按节点自身</option>
+                <option value="true">全局开</option>
+                <option value="false">全局关</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row2 mt">
+            <div>
+              <label for="scv">scv · 跳过证书校验</label>
+              <select id="scv">
+                <option value="">按节点自身</option>
+                <option value="true">全局跳过</option>
+                <option value="false">全局不跳</option>
+              </select>
+            </div>
+            <div>
+              <label for="sort">sort · 排序</label>
+              <select id="sort">
+                <option value="">不排序</option>
+                <option value="true">按名字排序</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row2 mt">
+            <div>
+              <label for="depr">depr · 过滤废弃加密</label>
+              <select id="depr">
+                <option value="">不过滤</option>
+                <option value="true">过滤 chacha20 等</option>
+              </select>
+            </div>
+            <div>
+              <label for="folder">folder · 分组前缀</label>
+              <input type="text" id="folder" placeholder="香港节点">
+            </div>
+          </div>
+
+          <div class="row2 mt">
+            <div>
+              <label for="proxy">proxy · 拉取代理</label>
+              <input type="text" id="proxy" placeholder="http://127.0.0.1:7890">
+            </div>
+            <div>
+              <label for="rename">rename · 自定义改名</label>
+              <input type="text" id="rename" placeholder="旧名@新名@@旧名2@新名2">
+            </div>
+          </div>
+
+          <p class="tip">udp/tfo/scv 三态：选「按节点自身」= 不传参数，由节点链接自己决定。选「全局开/关」覆盖所有节点。</p>
+        </details>
       </form>
     </section>
 
@@ -224,7 +320,7 @@
 
   <footer>
     <span>GET <a href="/version">/version</a></span>
-    <span>GET /sub?target=clash|loon</span>
+    <span>GET /sub?target=clash|loon|singbox</span>
   </footer>
 </div>
 
@@ -237,7 +333,7 @@
   let currentURL = '';
 
   // filename 占位符跟随 target，减少一处手填
-  const filenameByTarget = { clash: 'config.yaml', loon: 'config.conf' };
+  const filenameByTarget = { clash: 'config.yaml', loon: 'config.conf', singbox: 'config.json' };
 
   function buildURL() {
     const p = new URLSearchParams();
@@ -252,10 +348,18 @@
     const config = $('configCustom').value.trim();
     if (config) p.set('config', config);
 
-    for (const id of ['include', 'exclude', 'ua', 'filename']) {
+    // 基础文本参数
+    for (const id of ['include', 'exclude', 'ua', 'filename', 'folder', 'proxy', 'rename']) {
       const v = $(id).value.trim();
       if (v) p.set(id, v);
     }
+
+    // 三态/布尔下拉参数：空值不传，有值才传
+    for (const id of ['emoji', 'list', 'udp', 'tfo', 'scv', 'sort', 'depr']) {
+      const v = $(id).value;
+      if (v) p.set(id, v);
+    }
+
     return new URL('/sub?' + p.toString(), location.href).href;
   }
 
@@ -268,7 +372,7 @@
       copyBtn.disabled = false;
       openLink.href = url;
       openLink.removeAttribute('aria-disabled');
-      hint.textContent = '已按后端参数编码；粘贴进 Clash/Loon 客户端即可订阅。';
+      hint.textContent = '已按后端参数编码；粘贴进 Clash/Loon/sing-box 客户端即可订阅。';
     } else {
       linkBox.textContent = '填写 url 后自动生成…';
       linkBox.classList.add('empty');
