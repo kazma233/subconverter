@@ -208,3 +208,24 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+// parseBoolPtr 把参数解析为三态指针：空串返回 nil（允许上游全局覆盖生效），
+// 非空串走 parseBoolParam 语义。
+func parseBoolPtr(v string) *bool {
+	if v == "" {
+		return nil
+	}
+	b := parseBoolParam(v)
+	return &b
+}
+
+// parseBoolPtrOr 依次尝试多个候选键，返回第一个非空值的解析结果；全部为空返回 nil。
+func parseBoolPtrOr(vals ...string) *bool {
+	for _, v := range vals {
+		if v != "" {
+			b := parseBoolParam(v)
+			return &b
+		}
+	}
+	return nil
+}

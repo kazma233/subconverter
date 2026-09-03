@@ -64,7 +64,7 @@ func TestVLESSPrefixFallbacks(t *testing.T) {
 	if node.SNI != "peer.example.com" {
 		t.Errorf("SNI 应回退读 peer 参数, got %q", node.SNI)
 	}
-	if !node.SkipCertVerify {
+	if (node.SkipCertVerify == nil || !*node.SkipCertVerify) {
 		t.Errorf("allowInsecure=1 应置 SkipCertVerify=true")
 	}
 	if node.Name != "5.6.7.8:8443" {

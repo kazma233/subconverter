@@ -38,9 +38,24 @@ var fetchClient = &http.Client{Timeout: fetchTimeout}
 //   - subscription-userinfo 头（如 "upload=123; download=456; total=789"）
 //     解析为 map 返回；无该头时返回 nil
 //   - 响应 Content-Encoding 为 gzip 时自动解压
-func FetchSubscription(url, ua string) (content string, userinfo map[string]string, err error) {
-	return fetchWithClient(fetchClient, url, ua)
+// FetchSubscription 拉取订阅内容并解析 subscription-userinfo 响应头。
+//
+//	proxy 为空直连；非空时作为 HTTP 代理 URL（如 http://127.0.0.1:7890、socks5://...），
+//	解析失败即返回错误（对齐 C++ webget：代理非法时立即报错，而非静默回退直连）。
+//	ua 为空默认 "clash.meta"。
+func FetchSubscription(rawURL, ua, proxy string) (content string, userinfo map[string]string, err error) {
+	client := fetchClient
+	if proxy != "" {
+		proxyURL, perr := url.Parse(proxy)
+		if perr != nil {
+			return "", nil, fmt.Errorf("代理地址 %q 非法: %w", proxy, perr)
+		}
+		transport := http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		client = &http.Client{Timeout: fetchTimeout, Transport: &transport}
+	}
+	return fetchWithClient(client, rawURL, ua)
 }
+
 
 // fetchWithClient 使用指定 client 拉取（测试注入自定义超时用）。
 func fetchWithClient(client *http.Client, url, ua string) (string, map[string]string, error) {

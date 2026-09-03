@@ -31,7 +31,7 @@ func TestHysteria2SchemeAliases(t *testing.T) {
 		if node.SNI != "hy.example.com" {
 			t.Errorf("%s: SNI = %q", scheme, node.SNI)
 		}
-		if !node.SkipCertVerify {
+		if (node.SkipCertVerify == nil || !*node.SkipCertVerify) {
 			t.Errorf("%s: insecure=1 应置 SkipCertVerify=true", scheme)
 		}
 		if node.Hysteria2Ports != "20000-30000" {
@@ -55,7 +55,7 @@ func TestHysteria2DefaultName(t *testing.T) {
 	if node.Name != "1.1.1.1:36712" {
 		t.Errorf("缺省名称应为 host:port, got %q", node.Name)
 	}
-	if node.Hysteria2Obfs != "" || node.SkipCertVerify {
+	if node.Hysteria2Obfs != "" || (node.SkipCertVerify != nil && *node.SkipCertVerify) {
 		t.Errorf("缺省时不应设置 obfs/insecure: %+v", node)
 	}
 	if _, err := ParseLink("hy2://1.1.1.1:443"); err == nil {

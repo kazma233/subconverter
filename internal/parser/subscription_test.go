@@ -253,7 +253,7 @@ proxies:
 	if tj.Type != model.TypeTrojan || tj.Password != "tjpass" || tj.SNI != "tj.example.com" {
 		t.Errorf("trojan 节点字段错误: %+v", tj)
 	}
-	if !tj.SkipCertVerify {
+	if (tj.SkipCertVerify == nil || !*tj.SkipCertVerify) {
 		t.Errorf("trojan skip-cert-verify: true 未生效")
 	}
 	if len(tj.ALPN) != 2 || tj.ALPN[0] != "h2" || tj.ALPN[1] != "http/1.1" {

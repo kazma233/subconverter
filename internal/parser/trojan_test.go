@@ -28,7 +28,7 @@ func TestTrojanBasic(t *testing.T) {
 	if node.SNI != "tj.example.com" {
 		t.Errorf("SNI = %q", node.SNI)
 	}
-	if !node.SkipCertVerify {
+	if (node.SkipCertVerify == nil || !*node.SkipCertVerify) {
 		t.Errorf("allowInsecure=1 应置 SkipCertVerify=true")
 	}
 	if len(node.ALPN) != 1 || node.ALPN[0] != "h2" {

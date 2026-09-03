@@ -157,7 +157,7 @@ func TestRenderClashProtocols(t *testing.T) {
 		},
 		{
 			Type: model.TypeTrojan, Name: "tj节点", Server: "3.3.3.3", Port: 443,
-			Password: "tjpass", SNI: "tj.example.com", SkipCertVerify: true,
+			Password: "tjpass", SNI: "tj.example.com", SkipCertVerify: model.BoolPtr(true),
 		},
 		{
 			Type: model.TypeHysteria2, Name: "hy2节点", Server: "4.4.4.4", Port: 443,
@@ -185,7 +185,7 @@ func TestRenderClashProtocols(t *testing.T) {
 	if vm["uuid"] != "u1" || vm["cipher"] != "auto" || vm["alterId"] != 0 {
 		t.Errorf("vmess 字段错误: %v", vm)
 	}
-	if vm["tls"] != true || vm["servername"] != "cdn.example.com" {
+	if vm["tls"] != true || vm["sni"] != "cdn.example.com" {
 		t.Errorf("vmess TLS 字段错误: %v", vm)
 	}
 	if vm["network"] != "ws" {

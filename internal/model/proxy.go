@@ -38,15 +38,19 @@ func (t ProxyType) String() string {
 }
 
 // Proxy 单个代理节点的统一数据模型。
-// 布尔类字段中仅 UDP 使用三态指针（nil = 未设置，对应 C++ 版 tribool），
-// 其余布尔在本期输入侧无需区分"未设置/显式 false"，用普通 bool 即可。
+// UDP/TCPFastOpen/SkipCertVerify 使用三态指针（nil = 未设置，对应 C++ tribool）：
+//
+//	nil：按节点 URI 自身声明或 /sub 参数全局覆盖决定输出
+//	非 nil：显式 true/false
 type Proxy struct {
-	Type   ProxyType
-	Name   string
-	Server string
-	Port   int
-	UDP    *bool // 三态：nil 表示未设置，渲染时仅输出显式设置过的值
-	Group  string
+	Type           ProxyType
+	Name           string
+	Server         string
+	Port           int
+	UDP            *bool // 三态
+	TCPFastOpen    *bool // 三态（fast-open）
+	SkipCertVerify *bool // 三态（覆盖 TLS 证书校验策略）
+	Group          string
 
 	// VLESS / REALITY
 	UUID              string
@@ -55,7 +59,8 @@ type Proxy struct {
 	ShortID           string // REALITY short-id（sid），原样透传不做校验
 	ClientFingerprint string // uTLS 指纹（fp，如 chrome）
 	SNI               string
-	Fingerprint       string // 证书指纹（hpkp）
+	Fingerprint       string // 证书指纹（hpkp / pin-sha256）
+	TLSSecure         bool
 
 	// VMess
 	AlterID  int
@@ -72,15 +77,21 @@ type Proxy struct {
 	GRPCServiceName string
 	GRPCMode        string // gun / multi
 
-	// TLS
-	TLSSecure      bool
-	SkipCertVerify bool
-	ALPN           []string
+	ALPN []string
+
+	// CA 证书（两种输入形态：路径 / PEM 字符串），用于 sing-box tls.certificate 等
+	CACertPath string
+	CACertStr  string
 
 	// Hysteria2
+	Hysteria2Mport        string // 端口跳跃（mport 写法，与 ports 二选一）
 	Hysteria2Obfs         string // 混淆协议，通常为 salamander
 	Hysteria2ObfsPassword string
 	Hysteria2Ports        string // 端口跳跃范围，如 "2080:3000"
+	Hysteria2UpMbps       int    // 上行速率 mbps（sing-box up_mbps / Clash up-speed）
+	Hysteria2DownMbps     int    // 下行速率 mbps
+	Hysteria2CWND         int    // 拥塞窗口（packet 数）
+	Hysteria2HopInterval  int    // 端口跳跃间隔（秒）；sing-box 渲染时自动补 "s" 后缀
 }
 
 // BoolPtr 返回 bool 的指针，用于三态字段赋值。

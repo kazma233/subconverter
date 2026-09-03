@@ -11,12 +11,13 @@ import (
 // 参考 C++ 版 explodeTrojan。参数映射：
 //
 //	sni（缺省回退 peer）—— SNI
-//	allowInsecure（缺省回退 insecure）—— SkipCertVerify
+//	allowInsecure/insecure/scv —— SkipCertVerify
 //	alpn        —— ALPN
 //	type=ws     —— Network=ws，path 为 WS 路径（X-ui 风格）
 //	ws=1        —— Network=ws，wspath 为 WS 路径（v2rayN 风格）
+//	udp/tfo     —— 三态
 //
-// trojan 天然基于 TLS，TLSSecure 恒为 true（对齐 C++ trojanConstruct）。
+// trojan 天然基于 TLS，TLSSecure 恒为 true。
 func parseTrojan(link string) (*model.Proxy, error) {
 	body, query, remark := parseLinkParts(strings.TrimPrefix(link, "trojan://"))
 
@@ -37,8 +38,14 @@ func parseTrojan(link string) (*model.Proxy, error) {
 		Password:       password,
 		SNI:            firstNonEmpty(q["sni"], q["peer"]),
 		TLSSecure:      true,
-		SkipCertVerify: parseBoolParam(firstNonEmpty(q["allowInsecure"], q["insecure"])),
+		SkipCertVerify: parseBoolPtrOr(q["allowInsecure"], q["insecure"], q["scv"], q["skip-cert-verify"]),
 		ALPN:           splitALPN(q["alpn"]),
+	}
+	if v := parseBoolPtrOr(q["udp"]); v != nil {
+		node.UDP = v
+	}
+	if v := parseBoolPtrOr(q["tfo"], q["fast-open"]); v != nil {
+		node.TCPFastOpen = v
 	}
 
 	// WebSocket 传输的两种链接风格

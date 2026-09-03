@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,13 +85,27 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // subParams /sub 请求参数。
 type subParams struct {
-	Target   string // 目标格式：clash / loon
+	Target   string // 目标格式：clash / loon / singbox
 	URL      string // 订阅地址（或 | 分隔的节点链接列表），可用 | 分隔多个，支持混合
 	Config   string // 规则/策略组外配置（非必填，仅支持完整 http(s) URL；默认 ACL4SSR_Online_Full.ini）
 	Filename string // 响应 Content-Disposition 文件名
 	UA       string // 拉取订阅时使用的 User-Agent
 	Include  string // 保留节点的正则
 	Exclude  string // 剔除节点的正则
+
+	Emoji       *bool  // emoji=true → AddEmoji=true + RemoveEmoji=true
+	AddEmoji    *bool  // 仅追加国旗 emoji
+	RemoveEmoji *bool  // 仅删除节点名中已有 emoji
+	UDP         *bool  // 全局 udp 三态覆盖
+	TFO         *bool  // 全局 tfo 三态覆盖
+	SCV         *bool  // 全局 skip-cert-verify 三态覆盖
+	NodeList    *bool  // list=true：仅输出节点段
+	NewName     *bool  // new_name=true 新字段名 sni / false 旧 servername（Clash 专用）
+	Sort        *bool  // sort=true 按节点名字典序
+	Depr        *bool  // depr/fdn=true 过滤废弃加密
+	Proxy       string // 抓取订阅使用的代理 URL（http:// / socks5://）
+	Folder      string // 所有节点名前缀 "{folder} - 原名"
+	RenameStr   string // 自定义重命名：pattern@replacement，多段 @@ 分隔
 }
 
 // handleSub 订阅转换入口。
@@ -110,21 +126,34 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	q := r.URL.Query()
 	params := subParams{
-		Target:   q.Get("target"),
-		URL:      q.Get("url"),
-		Config:   q.Get("config"),
-		Filename: q.Get("filename"),
-		UA:       q.Get("ua"),
-		Include:  q.Get("include"),
-		Exclude:  q.Get("exclude"),
+		Target:    q.Get("target"),
+		URL:       q.Get("url"),
+		Config:    q.Get("config"),
+		Filename:  q.Get("filename"),
+		UA:        q.Get("ua"),
+		Include:   q.Get("include"),
+		Exclude:   q.Get("exclude"),
+		Proxy:     q.Get("proxy"),
+		Folder:    q.Get("folder"),
+		RenameStr: q.Get("rename"),
+		Emoji:       parseTribool(q, "emoji"),
+		AddEmoji:    parseTribool(q, "add_emoji"),
+		RemoveEmoji: parseTribool(q, "remove_emoji"),
+		UDP:         parseTribool(q, "udp"),
+		TFO:         parseTribool(q, "tfo"),
+		SCV:         parseTriboolMulti(q, "scv", "skip-cert-verify"),
+		NodeList:    parseTribool(q, "list"),
+		NewName:     parseTribool(q, "new_name"),
+		Sort:        parseTribool(q, "sort"),
+		Depr:        parseTriboolMulti(q, "fdn", "depr"),
 	}
 
 	// 目标格式校验
-	switch params.Target {
-	case "clash", "loon":
+	switch strings.ToLower(params.Target) {
+	case "clash", "loon", "singbox", "sing-box", "sb":
 	default:
 		log.Printf("[sub] 拒绝: 不支持的 target=%q", params.Target)
-		http.Error(w, "unsupported target: "+params.Target+"（仅支持 clash/loon）", http.StatusBadRequest)
+		http.Error(w, "unsupported target: "+params.Target+"（支持 clash/loon/singbox）", http.StatusBadRequest)
 		return
 	}
 
@@ -139,7 +168,7 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		params.Target, strings.Count(params.URL, "|")+1, configLabel(params.Config))
 
 	// 节点收集：| 分隔多段，节点链接与 http(s) 订阅地址混合
-	nodes, userinfo, err := collectNodes(params.URL, params.UA)
+	nodes, userinfo, err := collectNodes(params.URL, params.UA, params.Proxy)
 	if err != nil {
 		// 错误文本需返回客户端原文；日志侧替换订阅段为 host，避免 token 凭据落盘
 		log.Printf("[sub] 失败: 节点收集错误 耗时=%s: %s", time.Since(start), redactURLs(err.Error(), params.URL))
@@ -178,8 +207,28 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 渲染
-	output, err := render.Convert(params.Target, nodes, &render.Config{ACL: acl})
+	// 渲染：组装 /sub 参数到 render.Config
+	renderCfg := &render.Config{
+		ACL:              acl,
+		FolderPrefix:     params.Folder,
+		RenameRule:       parseRenameRules(params.RenameStr),
+		UDP:              params.UDP,
+		TCPFastOpen:      params.TFO,
+		SkipCertVerify:   params.SCV,
+		Sort:             boolValue(params.Sort, false),
+		FilterDeprecated: boolValue(params.Depr, false),
+		NodeList:         boolValue(params.NodeList, false),
+		NewName:          params.NewName,
+	}
+	if params.Emoji != nil && *params.Emoji {
+		renderCfg.AddEmoji = model.BoolPtr(true)
+		renderCfg.RemoveEmoji = model.BoolPtr(true)
+	} else {
+		renderCfg.AddEmoji = params.AddEmoji
+		renderCfg.RemoveEmoji = params.RemoveEmoji
+	}
+
+	output, err := render.Convert(params.Target, nodes, renderCfg)
 	if err != nil {
 		log.Printf("[sub] 失败: 渲染错误 耗时=%s: %v", time.Since(start), err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -192,8 +241,11 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Subscription-UserInfo", formatUserinfo(userinfo))
 	}
 	contentType := "text/yaml; charset=utf-8"
-	if params.Target == "loon" {
+	switch strings.ToLower(params.Target) {
+	case "loon":
 		contentType = "text/plain; charset=utf-8"
+	case "singbox", "sing-box", "sb":
+		contentType = "application/json; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", contentType)
 	if params.Filename != "" {
@@ -225,7 +277,7 @@ func redactURLs(text, urlParam string) string {
 // http(s) 订阅地址，后者经 fetch.FetchSubscription 拉取后由 ParseSubscription 解析。
 // 任一 http 段拉取或解析失败即整体报错（对齐 C++ 的严格行为）；
 // 返回首个携带 subscription-userinfo 的订阅的流量信息。
-func collectNodes(urlParam, ua string) ([]model.Proxy, map[string]string, error) {
+func collectNodes(urlParam, ua, proxy string) ([]model.Proxy, map[string]string, error) {
 	var nodes []model.Proxy
 	var userinfo map[string]string
 	for _, part := range strings.Split(urlParam, "|") {
@@ -234,7 +286,7 @@ func collectNodes(urlParam, ua string) ([]model.Proxy, map[string]string, error)
 			continue
 		}
 		if isHTTPURL(part) {
-			content, info, err := fetch.FetchSubscription(part, ua)
+			content, info, err := fetch.FetchSubscription(part, ua, proxy)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -291,4 +343,72 @@ func loadExternalConfig(configURL string) (string, error) {
 		return "", fmt.Errorf("外配置拉取失败: %w", err)
 	}
 	return content, nil
+}
+
+// parseTribool 按 key 解析 query 三态布尔：
+// 键不存在 → nil；键存在但空值 → true（C++ 空串 tribool 语义）。
+func parseTribool(q url.Values, key string) *bool {
+	if !q.Has(key) {
+		return nil
+	}
+	v := strings.TrimSpace(q.Get(key))
+	if v == "" {
+		return model.BoolPtr(true)
+	}
+	switch strings.ToLower(v) {
+	case "true", "1", "yes", "on":
+		return model.BoolPtr(true)
+	case "false", "0", "no", "off":
+		return model.BoolPtr(false)
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return model.BoolPtr(n > 0)
+	}
+	return model.BoolPtr(true)
+}
+
+// parseTriboolMulti 按优先级尝试多个键，返回第一个命中的三态结果。
+func parseTriboolMulti(q url.Values, keys ...string) *bool {
+	for _, k := range keys {
+		if q.Has(k) {
+			return parseTribool(q, k)
+		}
+	}
+	return nil
+}
+
+// boolValue 三态 → bool，nil 用 fallback。
+func boolValue(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+// parseRenameRules 解析 rename 参数："pattern@replacement@@pattern2@replacement2"。
+// 空或非法片段忽略。
+func parseRenameRules(s string) []render.RenameRule {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var out []render.RenameRule
+	for _, part := range strings.Split(s, "@@") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		idx := strings.Index(part, "@")
+		if idx <= 0 {
+			continue
+		}
+		out = append(out, render.RenameRule{
+			Pattern:     part[:idx],
+			Replacement: part[idx+1:],
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

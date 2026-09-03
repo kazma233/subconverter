@@ -8,19 +8,7 @@ import (
 )
 
 // parseVLESS 解析 vless://uuid@host:port?params#name 链接（含 REALITY 全参数）。
-// 参考 C++ 版 explodeStdVLESS。参数映射：
-//
-//	encryption            —— vless 固定为 none，本期模型无对应字段，忽略
-//	security              —— reality / tls 时置 TLSSecure=true
-//	sni（缺省回退 peer） —— SNI
-//	fp                    —— ClientFingerprint（uTLS 指纹）
-//	pbk / sid             —— REALITY PublicKey / ShortID（sid 经 SanitizeShortID 清洗）
-//	flow                  —— Flow（如 xtls-rprx-vision）
-//	type                  —— 传输层 Network：tcp/ws/grpc/h2/http/quic
-//	host / path           —— ws/h2 的 Host 头与路径
-//	serviceName / mode    —— grpc 服务名与模式（mode 缺省 gun，对齐 C++ vlessConstruct）
-//	alpn                  —— 逗号分隔，拆为 ALPN 切片
-//	insecure/allowInsecure —— SkipCertVerify
+// 参考 C++ 版 explodeStdVLESS。
 func parseVLESS(link string) (*model.Proxy, error) {
 	body := strings.TrimPrefix(link, "vless://")
 	body, query, remark := parseLinkParts(body)
@@ -54,10 +42,16 @@ func parseVLESS(link string) (*model.Proxy, error) {
 		node.TLSSecure = true
 	}
 
-	// insecure 缺省回退 allowInsecure（对齐 C++ explodeStdVLESS）
-	node.SkipCertVerify = parseBoolParam(firstNonEmpty(q["insecure"], q["allowInsecure"]))
+	// insecure / allowInsecure / scv 三态（空值返回 nil，允许 /sub 参数层覆盖）
+	node.SkipCertVerify = parseBoolPtrOr(q["insecure"], q["allowInsecure"], q["scv"], q["skip-cert-verify"])
+	if v := parseBoolPtrOr(q["udp"]); v != nil {
+		node.UDP = v
+	}
+	if v := parseBoolPtrOr(q["tfo"], q["fast-open"]); v != nil {
+		node.TCPFastOpen = v
+	}
 
-	// 传输层。type 缺省 tcp（比 C++ 更宽容：C++ 对缺省/未知 type 直接丢弃节点）
+	// 传输层。type 缺省 tcp
 	network := q["type"]
 	if network == "" {
 		network = "tcp"
@@ -86,7 +80,6 @@ func parseVLESS(link string) (*model.Proxy, error) {
 
 	node.ALPN = splitALPN(q["alpn"])
 
-	// 节点名称缺省 host:port
 	if node.Name == "" {
 		node.Name = defaultName(host, port)
 	}

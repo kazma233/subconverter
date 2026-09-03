@@ -47,7 +47,7 @@ func loonProtocolNodes() []model.Proxy {
 		},
 		{
 			Type: model.TypeTrojan, Name: "tj节点", Server: "3.3.3.3", Port: 443,
-			Password: "tjpass", SNI: "tj.example.com", SkipCertVerify: true,
+			Password: "tjpass", SNI: "tj.example.com", SkipCertVerify: model.BoolPtr(true),
 		},
 		{
 			Type: model.TypeHysteria2, Name: "hy2节点", Server: "4.4.4.4", Port: 443,

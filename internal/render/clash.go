@@ -23,18 +23,43 @@ import (
 // ACL 为 nil 时仅渲染节点段与 MATCH 兜底规则。
 type Config struct {
 	ACL *rule.ACLConfig
+
+	// /sub 参数映射的渲染开关（见 C++ interfaces.cpp 参数解析）。
+	// 三态字段 nil = 未设置 = 不强制覆盖 = 沿用节点自身声明。
+	AddEmoji     *bool  // nil/false=不加；true=按默认 emoji 规则表追加国旗表情（先去旧再加新）
+	RemoveEmoji  *bool  // true 先删除原始节点名中已有的 emoji
+	UDP          *bool  // 全局 udp 覆盖（nil 不覆盖）
+	TCPFastOpen  *bool  // 全局 tfo 覆盖
+	SkipCertVerify *bool // 全局 scv 覆盖
+	NewName      *bool  // true: clash 使用新版字段名（sni/...）；false: 兼容旧版（servername/...）
+	Sort         bool   // true: 节点按名字典序升序排列
+	FilterDeprecated bool // true: 过滤废弃节点（目前仅 SS chacha20）
+	NodeList     bool   // true: nodelist 模式，只输出节点段
+	RenameRule   []RenameRule // 自定义重命名：按正则匹配替换（来自 &new_name= 或外配置）
+	FolderPrefix string // 所有节点名前缀："{folder} - {原Name}"
+}
+
+// RenameRule 自定义重命名规则（对应 C++ RegexMatchConfig replace）。
+// Pattern 非锚定匹配节点名，命中后用 Replacement 替换（可含 $1 捕获组）。
+type RenameRule struct {
+	Pattern     string
+	Replacement string
 }
 
 // Convert 内部调用方的统一渲染入口。
 // target 支持 "clash" 与 "loon"。
 func Convert(target string, nodes []model.Proxy, cfg *Config) (string, error) {
-	switch target {
+	// /sub 参数节点级覆写：前缀/重命名/emoji/三态覆盖/废弃过滤/排序 —— 对所有目标格式生效
+	nodes = ApplySubOverrides(nodes, cfg)
+	switch strings.ToLower(target) {
 	case "clash":
 		return RenderClash(nodes, cfg)
 	case "loon":
 		return RenderLoon(nodes, cfg)
+	case "singbox", "sing-box", "sb":
+		return RenderSingBox(nodes, cfg)
 	default:
-		return "", fmt.Errorf("不支持的输出格式: %q（当前仅支持 clash/loon）", target)
+		return "", fmt.Errorf("不支持的输出格式: %q（当前支持 clash/loon/singbox）", target)
 	}
 }
 
@@ -58,18 +83,28 @@ func RenderClash(nodes []model.Proxy, cfg *Config) (string, error) {
 	// 节点名清洗：'=' 替换为 '-'（部分客户端解析异常）+ 重名去重（C++ processRemark）
 	sanitizeNodeNames(nodes)
 
-	var buf bytes.Buffer
-	buf.WriteString(clashBaseTemplate)
-	buf.WriteString("proxies:\n")
-
 	proxies := &yaml.Node{Kind: yaml.SequenceNode}
 	for i := range nodes {
-		node, err := renderProxy(&nodes[i])
+		node, err := renderProxy(&nodes[i], cfg)
 		if err != nil {
 			return "", fmt.Errorf("渲染节点 %q 失败: %w", nodes[i].Name, err)
 		}
 		proxies.Content = append(proxies.Content, node)
 	}
+
+	// NodeList 模式：只输出 proxies 段，跳过 base template / 策略组 / 规则
+	if cfg.NodeList {
+		var buf bytes.Buffer
+		buf.WriteString("proxies:\n")
+		if err := writeYAMLSection(&buf, proxies); err != nil {
+			return "", err
+		}
+		return unescapeUnicodeEscapes(buf.String()), nil
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(clashBaseTemplate)
+	buf.WriteString("proxies:\n")
 	if err := writeYAMLSection(&buf, proxies); err != nil {
 		return "", err
 	}
@@ -220,6 +255,22 @@ func setUDP(m *yaml.Node, udp *bool) {
 	}
 }
 
+// setTriBoolTrue 三态布尔：仅当非 nil 且 true 时输出 key: true（skip-cert-verify / fast-open 等语义）。
+func setTriBoolTrue(m *yaml.Node, key string, val *bool) {
+if val != nil && *val {
+	setField(m, key, boolNode(true))
+	}
+}
+
+// clashSNIField 按 cfg.NewName 返回 mihomo sni 字段名：
+// nil/true → "sni"（新字段），false → "servername"（旧字段兼容老内核）。
+func clashSNIField(cfg *Config) string {
+	if cfg != nil && cfg.NewName != nil && !*cfg.NewName {
+		return "servername"
+	}
+	return "sni"
+}
+
 // setALPN 非空 ALPN 序列字段。
 func setALPN(m *yaml.Node, alpn []string) {
 	if len(alpn) == 0 {
@@ -236,27 +287,27 @@ func setALPN(m *yaml.Node, alpn []string) {
 
 // renderProxy 按协议渲染单个节点为 mapping。
 // 所有字段遵循"未设置不输出"；UDP 三态；REALITY 关键字段强制引号。
-func renderProxy(p *model.Proxy) (*yaml.Node, error) {
+func renderProxy(p *model.Proxy, cfg *Config) (*yaml.Node, error) {
 	switch p.Type {
 	case model.TypeVLESS:
-		return renderVLESS(p), nil
+		return renderVLESS(p, cfg), nil
 	case model.TypeVMess:
-		return renderVMess(p), nil
+		return renderVMess(p, cfg), nil
 	case model.TypeSS:
-		return renderSS(p), nil
+		return renderSS(p, cfg), nil
 	case model.TypeTrojan:
-		return renderTrojan(p), nil
+		return renderTrojan(p, cfg), nil
 	case model.TypeHysteria2:
-		return renderHysteria2(p), nil
+		return renderHysteria2(p, cfg), nil
 	case model.TypeAnyTLS:
-		return renderAnyTLS(p), nil
+		return renderAnyTLS(p, cfg), nil
 	default:
 		return nil, fmt.Errorf("不支持的协议类型 %v", p.Type)
 	}
 }
 
 // renderVLESS 渲染 vless（含 REALITY）节点。
-func renderVLESS(p *model.Proxy) *yaml.Node {
+func renderVLESS(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
 	setField(m, "type", strNode("vless"))
@@ -265,7 +316,7 @@ func renderVLESS(p *model.Proxy) *yaml.Node {
 	setStr(m, "uuid", p.UUID)
 	setStr(m, "flow", p.Flow)
 	setBoolTrue(m, "tls", p.TLSSecure)
-	setStr(m, "servername", p.SNI)
+	setStr(m, clashSNIField(cfg), p.SNI)
 	setTransport(m, p)
 	// REALITY：public-key 为空则整个 reality-opts 不输出；
 	// short-id 一律双引号（裸 29845e28 会被下游解析为浮点数），为空时只输出 public-key
@@ -287,14 +338,15 @@ func renderVLESS(p *model.Proxy) *yaml.Node {
 	} else if p.ClientFingerprint != "" {
 		setStr(m, "client-fingerprint", p.ClientFingerprint)
 	}
-	setBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
+	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)
 	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m
 }
 
 // renderVMess 渲染 vmess 节点。
-func renderVMess(p *model.Proxy) *yaml.Node {
+func renderVMess(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
 	setField(m, "type", strNode("vmess"))
@@ -304,16 +356,17 @@ func renderVMess(p *model.Proxy) *yaml.Node {
 	setField(m, "alterId", intNode(p.AlterID))
 	setStr(m, "cipher", p.Security)
 	setBoolTrue(m, "tls", p.TLSSecure)
-	setStr(m, "servername", p.SNI)
+	setStr(m, clashSNIField(cfg), p.SNI)
 	setTransport(m, p)
-	setBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
+	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)
 	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m
 }
 
 // renderSS 渲染 shadowsocks 节点。
-func renderSS(p *model.Proxy) *yaml.Node {
+func renderSS(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
 	setField(m, "type", strNode("ss"))
@@ -322,11 +375,12 @@ func renderSS(p *model.Proxy) *yaml.Node {
 	setStr(m, "cipher", p.Cipher)
 	setPasswordField(m, "password", p.Password)
 	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m
 }
 
 // renderTrojan 渲染 trojan 节点。
-func renderTrojan(p *model.Proxy) *yaml.Node {
+func renderTrojan(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
 	setField(m, "type", strNode("trojan"))
@@ -335,14 +389,15 @@ func renderTrojan(p *model.Proxy) *yaml.Node {
 	setPasswordField(m, "password", p.Password)
 	setStr(m, "sni", p.SNI)
 	setTransport(m, p)
-	setBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
+	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)
 	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m
 }
 
 // renderHysteria2 渲染 hysteria2 节点（字段对齐 mihomo：password/obfs/obfs-password/sni/alpn/skip-cert-verify/ports）。
-func renderHysteria2(p *model.Proxy) *yaml.Node {
+func renderHysteria2(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
 	setField(m, "type", strNode("hysteria2"))
@@ -353,14 +408,15 @@ func renderHysteria2(p *model.Proxy) *yaml.Node {
 	setStr(m, "obfs", p.Hysteria2Obfs)
 	setPasswordField(m, "obfs-password", p.Hysteria2ObfsPassword)
 	setStr(m, "sni", p.SNI)
-	setBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
+	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)
 	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m
 }
 
 // renderAnyTLS 渲染 anytls 节点。
-func renderAnyTLS(p *model.Proxy) *yaml.Node {
+func renderAnyTLS(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
 	setField(m, "type", strNode("anytls"))
@@ -369,9 +425,10 @@ func renderAnyTLS(p *model.Proxy) *yaml.Node {
 	setPasswordField(m, "password", p.Password)
 	setStr(m, "sni", p.SNI)
 	setStr(m, "client-fingerprint", p.ClientFingerprint)
-	setBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
+	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)
 	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m
 }
 

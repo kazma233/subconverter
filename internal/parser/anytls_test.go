@@ -25,7 +25,7 @@ func TestAnyTLSBasic(t *testing.T) {
 	if !node.TLSSecure {
 		t.Errorf("anytls 应恒为 TLSSecure=true")
 	}
-	if !node.SkipCertVerify {
+	if (node.SkipCertVerify == nil || !*node.SkipCertVerify) {
 		t.Errorf("insecure=1 应置 SkipCertVerify=true")
 	}
 	if node.SNI != "tls.example.com" {
@@ -52,7 +52,7 @@ func TestAnyTLSPeerFallback(t *testing.T) {
 	if node.Name != "1.2.3.4:8443" {
 		t.Errorf("缺省名称应为 host:port, got %q", node.Name)
 	}
-	if node.SkipCertVerify {
+	if node.SkipCertVerify != nil && *node.SkipCertVerify {
 		t.Errorf("未传 insecure 时 SkipCertVerify 应为 false")
 	}
 	if _, err := ParseLink("anytls://only-host:443"); err == nil {

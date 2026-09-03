@@ -41,6 +41,21 @@ func RenderLoon(nodes []model.Proxy, cfg *Config) (string, error) {
 	// 节点名清洗与 Clash 侧一致（'=' 清洗 + 重名去重）
 	sanitizeNodeNames(nodes)
 
+	// NodeList 模式：只输出 [Proxy] 段，跳过 general template / 策略组 / 规则
+	if cfg.NodeList {
+		var buf strings.Builder
+		buf.WriteString("[Proxy]\n")
+		for i := range nodes {
+			line, ok := proxyToLoonLine(&nodes[i])
+			if !ok {
+				log.Printf("Loon 渲染跳过节点 %q（不支持的传输类型 %q）", nodes[i].Name, nodes[i].Network)
+				continue
+			}
+			buf.WriteString(nodes[i].Name + " = " + line + "\n")
+		}
+		return buf.String(), nil
+	}
+
 	var buf strings.Builder
 	buf.WriteString(loonGeneralTemplate)
 
@@ -147,10 +162,18 @@ func loonVMess(p *model.Proxy) (string, bool) {
 	default:
 		return "", false
 	}
-	if p.SkipCertVerify {
+	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
 	}
+	loonAppendTFO(&b, p)
 	return b.String(), true
+}
+
+// loonAppendTFO 仅当 TCPFastOpen 三态为 true 时追加 ",fast-open=true"。
+func loonAppendTFO(b *strings.Builder, p *model.Proxy) {
+	if p.TCPFastOpen != nil && *p.TCPFastOpen {
+		b.WriteString(",fast-open=true")
+	}
 }
 
 // loonTrojan C++: trojan,hostname,port,"password"[,tls-name=...][,skip-cert-verify=...]
@@ -160,9 +183,10 @@ func loonTrojan(p *model.Proxy) string {
 	if p.SNI != "" {
 		b.WriteString(",tls-name=" + p.SNI)
 	}
-	if p.SkipCertVerify {
+	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
 	}
+	loonAppendTFO(&b, p)
 	return b.String()
 }
 
@@ -180,9 +204,10 @@ func loonHysteria2(p *model.Proxy) string {
 	if p.SNI != "" {
 		b.WriteString(",sni=" + p.SNI)
 	}
-	if p.SkipCertVerify {
+	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
 	}
+	loonAppendTFO(&b, p)
 	return b.String()
 }
 
@@ -226,9 +251,10 @@ func loonVLESS(p *model.Proxy) (string, bool) {
 			b.WriteString(",shortId=" + p.ShortID)
 		}
 	}
-	if p.SkipCertVerify {
+	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
 	}
+	loonAppendTFO(&b, p)
 	return b.String(), true
 }
 
@@ -240,9 +266,10 @@ func loonAnyTLS(p *model.Proxy) string {
 	if p.SNI != "" {
 		b.WriteString(",sni=" + p.SNI)
 	}
-	if p.SkipCertVerify {
+	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
 	}
+	loonAppendTFO(&b, p)
 	return b.String()
 }
 

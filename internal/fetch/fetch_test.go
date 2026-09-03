@@ -31,7 +31,7 @@ func TestFetchSubscriptionBase64WithUserinfo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	content, userinfo, err := FetchSubscription(srv.URL, "")
+	content, userinfo, err := FetchSubscription(srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestFetchSubscriptionCustomUA(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, _, err := FetchSubscription(srv.URL, "v2rayng/1.9.0"); err != nil {
+	if _, _, err := FetchSubscription(srv.URL, "v2rayng/1.9.0", ""); err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
 	if ua, _ := gotUA.Load().(string); ua != "v2rayng/1.9.0" {
@@ -73,7 +73,7 @@ func TestFetchSubscriptionNoUserinfoHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, userinfo, err := FetchSubscription(srv.URL, "")
+	_, userinfo, err := FetchSubscription(srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestFetchSubscriptionGzip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	content, _, err := FetchSubscription(srv.URL, "")
+	content, _, err := FetchSubscription(srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestFetchSubscriptionRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	content, _, err := FetchSubscription(srv.URL, "")
+	content, _, err := FetchSubscription(srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("重试后应成功: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestFetchSubscriptionNon200RetryExhausted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := FetchSubscription(srv.URL, "")
+	_, _, err := FetchSubscription(srv.URL, "", "")
 	if err == nil {
 		t.Fatal("持续 403 应报错")
 	}

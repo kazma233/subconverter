@@ -8,13 +8,7 @@ import (
 )
 
 // parseAnyTLS 解析 anytls://password@host:port?params#name 链接，
-// 参考 C++ 版 explodeStdAnyTLS。参数映射：
-//
-//	sni（缺省回退 peer，对齐 C++）—— SNI
-//	insecure                  —— SkipCertVerify
-//	alpn                      —— ALPN
-//
-// anytls 天然基于 TLS，TLSSecure 恒为 true。
+// 参考 C++ 版 explodeStdAnyTLS。
 func parseAnyTLS(link string) (*model.Proxy, error) {
 	body, query, remark := parseLinkParts(strings.TrimPrefix(link, "anytls://"))
 
@@ -28,15 +22,22 @@ func parseAnyTLS(link string) (*model.Proxy, error) {
 
 	q := parseQuery(query)
 	node := &model.Proxy{
-		Type:           model.TypeAnyTLS,
-		Name:           remark,
-		Server:         host,
-		Port:           port,
-		Password:       password,
-		SNI:            firstNonEmpty(q["sni"], q["peer"]),
-		TLSSecure:      true,
-		SkipCertVerify: parseBoolParam(q["insecure"]),
-		ALPN:           splitALPN(q["alpn"]),
+		Type:              model.TypeAnyTLS,
+		Name:              remark,
+		Server:            host,
+		Port:              port,
+		Password:          password,
+		SNI:               firstNonEmpty(q["sni"], q["peer"]),
+		ClientFingerprint: firstNonEmpty(q["fp"], q["client-fingerprint"]),
+		TLSSecure:         true,
+		SkipCertVerify:    parseBoolPtrOr(q["insecure"], q["scv"], q["skip-cert-verify"]),
+		ALPN:              splitALPN(q["alpn"]),
+	}
+	if v := parseBoolPtrOr(q["udp"]); v != nil {
+		node.UDP = v
+	}
+	if v := parseBoolPtrOr(q["tfo"], q["fast-open"]); v != nil {
+		node.TCPFastOpen = v
 	}
 
 	if node.Name == "" {

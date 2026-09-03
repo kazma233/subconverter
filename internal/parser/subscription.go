@@ -171,8 +171,11 @@ func clashMapToProxy(m map[string]any) *model.Proxy {
 	if udp, ok := clashBool(m, "udp"); ok {
 		node.UDP = model.BoolPtr(udp)
 	}
-	if scv, ok := clashBool(m, "skip-cert-verify"); ok {
+	if scv, ok := clashBoolPtr(m, "skip-cert-verify", "skip-cert-verify", "insecure"); ok {
 		node.SkipCertVerify = scv
+	}
+	if tfo, ok := clashBoolPtr(m, "tfo", "fast-open", "fastopen"); ok {
+		node.TCPFastOpen = tfo
 	}
 	node.ALPN = clashALPN(m)
 	node.ClientFingerprint = clashStr(m, "client-fingerprint")
@@ -223,7 +226,14 @@ func clashMapToProxy(m map[string]any) *model.Proxy {
 		node.Password = clashStr(m, "password")
 		node.Hysteria2Obfs = clashStr(m, "obfs")
 		node.Hysteria2ObfsPassword = clashStr(m, "obfs-password")
-		node.Hysteria2Ports = clashStr(m, "ports")
+		node.Hysteria2Ports = firstNonEmpty(clashStr(m, "ports"), clashStr(m, "mport"))
+		node.Hysteria2Mport = clashStr(m, "mport")
+		node.Hysteria2UpMbps, _ = clashInt(m, "up", "up-mbps", "up-speed", "upSpeed")
+		node.Hysteria2DownMbps, _ = clashInt(m, "down", "down-mbps", "down-speed", "downSpeed")
+		node.Hysteria2CWND, _ = clashInt(m, "cwnd")
+		node.Hysteria2HopInterval, _ = clashInt(m, "hop", "hop-interval", "hopInterval")
+		node.CACertPath = clashStr(m, "ca")
+		node.CACertStr = clashStr(m, "ca-str")
 		node.SNI = sni
 		node.TLSSecure = true
 	case "anytls":
@@ -363,4 +373,24 @@ func mapStr(m map[string]any) map[string]string {
 		}
 	}
 	return out
+}
+
+// clashBoolPtr 依次尝试多个键名，取第一个命中的布尔值，返回 *bool；
+// 所有键都不存在返回 nil, false。
+func clashBoolPtr(m map[string]any, keys ...string) (*bool, bool) {
+	for _, k := range keys {
+		if s, exists := m[k].(string); exists {
+			var b bool
+			switch strings.ToLower(s) {
+			case "true", "yes", "on":
+				b = true
+			case "false", "no", "off":
+				b = false
+			default:
+				b = parseBoolParam(s)
+			}
+			return &b, true
+		}
+	}
+	return nil, false
 }
