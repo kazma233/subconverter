@@ -6,6 +6,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -30,11 +31,27 @@ const Version = "v0.1.0"
 // 需要特定配置时通过 config 参数显式指定。
 const defaultACLConfig = "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full.ini"
 
+const (
+	maxConcurrentConversions = 8
+	conversionTimeout        = 60 * time.Second
+)
+
+var conversionSlots = make(chan struct{}, maxConcurrentConversions)
+
+type subscriptionFetcher func(context.Context, string, string, string) (string, map[string]string, error)
+type textFetcher func(context.Context, string) (string, error)
+
 // NewHandler 构建根路由。
 func NewHandler() http.Handler {
+	return newHandler(fetchSubscription, fetch.FetchText)
+}
+
+func newHandler(fetchSub subscriptionFetcher, fetchText textFetcher) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/version", handleVersion)
-	mux.HandleFunc("/sub", handleSub)
+	mux.HandleFunc("/sub", func(w http.ResponseWriter, r *http.Request) {
+		handleSub(w, r, fetchSub, fetchText)
+	})
 	mux.HandleFunc("/", handleIndex)
 	return withAccessLog(mux)
 }
@@ -116,25 +133,35 @@ type subParams struct {
 //   - 订阅段的 subscription-userinfo 以 Subscription-UserInfo 头回传
 //     （对齐 C++ appendUserinfo）
 //   - config 仅支持完整 http(s) URL（拉取失败即 400）；不传时用默认远程外配置
-func handleSub(w http.ResponseWriter, r *http.Request) {
+func handleSub(w http.ResponseWriter, r *http.Request, fetchSub subscriptionFetcher, fetchText textFetcher) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	start := time.Now()
+	select {
+	case conversionSlots <- struct{}{}:
+		defer func() { <-conversionSlots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many concurrent conversions; retry later", http.StatusTooManyRequests)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), conversionTimeout)
+	defer cancel()
 	q := r.URL.Query()
 	params := subParams{
-		Target:    q.Get("target"),
-		URL:       q.Get("url"),
-		Config:    q.Get("config"),
-		Filename:  q.Get("filename"),
-		UA:        q.Get("ua"),
-		Include:   q.Get("include"),
-		Exclude:   q.Get("exclude"),
-		Proxy:     q.Get("proxy"),
-		Folder:    q.Get("folder"),
-		RenameStr: q.Get("rename"),
+		Target:      q.Get("target"),
+		URL:         q.Get("url"),
+		Config:      q.Get("config"),
+		Filename:    q.Get("filename"),
+		UA:          q.Get("ua"),
+		Include:     q.Get("include"),
+		Exclude:     q.Get("exclude"),
+		Proxy:       q.Get("proxy"),
+		Folder:      q.Get("folder"),
+		RenameStr:   q.Get("rename"),
 		Emoji:       parseTribool(q, "emoji"),
 		AddEmoji:    parseTribool(q, "add_emoji"),
 		RemoveEmoji: parseTribool(q, "remove_emoji"),
@@ -166,8 +193,12 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		params.Target, strings.Count(params.URL, "|")+1, configLabel(params.Config))
 
 	// 节点收集：| 分隔多段，节点链接与 http(s) 订阅地址混合
-	nodes, userinfo, err := collectNodes(params.URL, params.UA, params.Proxy)
+	nodes, userinfo, err := collectNodes(ctx, params.URL, params.UA, params.Proxy, fetchSub)
 	if err != nil {
+		if err := writeConversionTimeout(w, ctx); err != nil {
+			log.Printf("[sub] 失败: 节点收集超时 耗时=%s", time.Since(start))
+			return
+		}
 		// 错误文本需返回客户端原文；日志侧替换订阅段为 host，避免 token 凭据落盘
 		log.Printf("[sub] 失败: 节点收集错误 耗时=%s: %s", time.Since(start), redactURLs(err.Error(), params.URL))
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -179,7 +210,7 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	if params.Include != "" || params.Exclude != "" {
 		before := len(nodes)
 		nodes = filter.FilterNodes(nodes, params.Include, params.Exclude)
-		log.Printf("[sub] 过滤(include=%q exclude=%q): %d → %d", params.Include, params.Exclude, before, len(nodes))
+		log.Printf("[sub] 节点过滤: %d → %d", before, len(nodes))
 	}
 	if len(nodes) == 0 {
 		log.Printf("[sub] 失败: 过滤后无剩余节点")
@@ -192,22 +223,32 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	if configName == "" {
 		configName = defaultACLConfig
 	}
-	aclContent, err := loadExternalConfig(configName)
+	aclContent, err := loadExternalConfig(ctx, configName, fetchText)
 	if err != nil {
+		if err := writeConversionTimeout(w, ctx); err != nil {
+			log.Printf("[sub] 失败: 外配置加载超时 耗时=%s", time.Since(start))
+			return
+		}
 		log.Printf("[sub] 失败: 外配置加载错误 耗时=%s: %v", time.Since(start), err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	acl, err := rule.ParseINI(aclContent)
 	if err != nil {
-		log.Printf("[sub] 失败: 外配置 %s 解析错误: %v", configName, err)
-		http.Error(w, fmt.Sprintf("解析外配置 %s 失败: %v", configName, err), http.StatusBadRequest)
+		if err := writeConversionTimeout(w, ctx); err != nil {
+			log.Printf("[sub] 失败: 外配置解析超时 耗时=%s", time.Since(start))
+			return
+		}
+		log.Printf("[sub] 失败: 外配置 host=%s 解析错误", configLabel(configName))
+		http.Error(w, fmt.Sprintf("解析外配置 host=%s 失败", configLabel(configName)), http.StatusBadRequest)
 		return
 	}
 
 	// 渲染：组装 /sub 参数到 render.Config
 	renderCfg := &render.Config{
 		ACL:              acl,
+		RequestContext:   ctx,
+		FetchText:        fetchText,
 		FolderPrefix:     params.Folder,
 		RenameRule:       parseRenameRules(params.RenameStr),
 		UDP:              params.UDP,
@@ -227,8 +268,20 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 
 	output, err := render.Convert(params.Target, nodes, renderCfg)
 	if err != nil {
-		log.Printf("[sub] 失败: 渲染错误 耗时=%s: %v", time.Since(start), err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if err := writeConversionTimeout(w, ctx); err != nil {
+			log.Printf("[sub] 失败: 渲染超时 耗时=%s", time.Since(start))
+			return
+		}
+		log.Printf("[sub] 失败: 渲染错误 耗时=%s", time.Since(start))
+		if fetch.IsAddressRejected(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := writeConversionTimeout(w, ctx); err != nil {
+		log.Printf("[sub] 失败: 渲染超时 耗时=%s", time.Since(start))
 		return
 	}
 	log.Printf("[sub] 完成: target=%s 节点=%d 输出=%d字节 耗时=%s",
@@ -251,12 +304,21 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(output))
 }
 
+// writeConversionTimeout 让整次转换的 60 秒时限与单次下载超时可被客户端区分。
+func writeConversionTimeout(w http.ResponseWriter, ctx context.Context) error {
+	if ctx.Err() != context.DeadlineExceeded {
+		return nil
+	}
+	http.Error(w, fmt.Sprintf("转换超时（%ds）", int(conversionTimeout.Seconds())), http.StatusGatewayTimeout)
+	return context.DeadlineExceeded
+}
+
 // configLabel 日志用 config 描述：未显式指定时标为默认，便于区分来源。
 func configLabel(config string) string {
 	if config == "" {
-		return "默认(" + defaultACLConfig + ")"
+		return "默认(" + fetch.URLLabel(defaultACLConfig) + ")"
 	}
-	return config
+	return fetch.URLLabel(config)
 }
 
 // redactURLs 把日志文本中出现的各订阅段 URL 替换为其 host（仅替换已知订阅段，
@@ -274,7 +336,7 @@ func redactURLs(text, urlParam string) string {
 // http(s) 订阅地址，后者经 fetch.FetchSubscription 拉取后由 ParseSubscription 解析。
 // 任一 http 段拉取或解析失败即整体报错（对齐 C++ 的严格行为）；
 // 返回首个携带 subscription-userinfo 的订阅的流量信息。
-func collectNodes(urlParam, ua, proxy string) ([]model.Proxy, map[string]string, error) {
+func collectNodes(ctx context.Context, urlParam, ua, proxy string, fetchSub subscriptionFetcher) ([]model.Proxy, map[string]string, error) {
 	var nodes []model.Proxy
 	var userinfo map[string]string
 	for _, part := range strings.Split(urlParam, "|") {
@@ -283,7 +345,7 @@ func collectNodes(urlParam, ua, proxy string) ([]model.Proxy, map[string]string,
 			continue
 		}
 		if isHTTPURL(part) {
-			content, info, err := fetch.FetchSubscription(part, ua, proxy)
+			content, info, err := fetchSub(ctx, part, ua, proxy)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -292,14 +354,16 @@ func collectNodes(urlParam, ua, proxy string) ([]model.Proxy, map[string]string,
 			}
 			subNodes, err := parser.ParseSubscription(content)
 			if err != nil {
-				return nil, nil, fmt.Errorf("订阅 %s 解析失败: %w", part, err)
+				// 订阅正文可能含节点链接 query，解析详情不能进入响应或日志。
+				return nil, nil, fmt.Errorf("订阅 host=%s 解析失败", fetch.URLLabel(part))
 			}
 			nodes = append(nodes, subNodes...)
 			continue
 		}
 		node, err := parser.ParseLink(part)
 		if err != nil {
-			return nil, nil, fmt.Errorf("节点链接解析失败: %w", err)
+			// 节点链接本身可含查询凭据，解析器详情不能进入响应或日志。
+			return nil, nil, fmt.Errorf("节点链接解析失败")
 		}
 		nodes = append(nodes, *node)
 	}
@@ -331,15 +395,19 @@ func formatUserinfo(userinfo map[string]string) string {
 // loadExternalConfig 加载外配置内容：config 参数只支持完整 http(s) URL
 // （如 https://raw.githubusercontent.com/.../ACL4SSR_Online_Mini.ini），
 // 不支持裸名字。下载失败（网络不可达 / 非 200）即返回错误，由调用方转为 400。
-func loadExternalConfig(configURL string) (string, error) {
+func loadExternalConfig(ctx context.Context, configURL string, fetchText textFetcher) (string, error) {
 	if !isHTTPURL(configURL) {
-		return "", fmt.Errorf("外配置 %q 非法：仅支持 http(s) URL", configURL)
+		return "", fmt.Errorf("外配置地址非法：仅支持 http(s) URL")
 	}
-	content, err := render.FetchRemote(configURL)
+	content, err := render.FetchRemoteWith(ctx, configURL, fetchText)
 	if err != nil {
 		return "", fmt.Errorf("外配置拉取失败: %w", err)
 	}
 	return content, nil
+}
+
+func fetchSubscription(ctx context.Context, rawURL, ua, proxy string) (string, map[string]string, error) {
+	return fetch.FetchSubscriptionContext(ctx, rawURL, ua, proxy)
 }
 
 // parseTribool 按 key 解析 query 三态布尔：

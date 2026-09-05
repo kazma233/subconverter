@@ -228,7 +228,7 @@ func TestRenderLoonEndToEndMini(t *testing.T) {
 		t.Fatalf("解析配置失败: %v", err)
 	}
 
-	out, err := RenderLoon(loadSampleNodes(t), &Config{ACL: acl})
+	out, err := RenderLoon(loadSampleNodes(t), &Config{ACL: acl, FetchText: renderTestClient().FetchText})
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}

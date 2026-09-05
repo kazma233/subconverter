@@ -2,18 +2,39 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"subconv/internal/fetch"
 	"subconv/internal/parser"
 )
+
+func newTestHandler() http.Handler {
+	dialer := &net.Dialer{}
+	client := fetch.NewClient(fetch.ClientOptions{
+		LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		},
+	})
+	return newHandler(client.FetchSubscription, client.FetchText)
+}
 
 // setupACL 注入外配置与规则集动态拉取环境，避免成功链路依赖公网。
 func setupACL(t *testing.T) string {
@@ -53,7 +74,7 @@ const (
 func TestVersionEndpoint(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/version", nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -72,7 +93,7 @@ func TestSubClashFullChain(t *testing.T) {
 		"&config=" + url.QueryEscape(acl)
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
@@ -115,7 +136,7 @@ func TestSubFilename(t *testing.T) {
 		"&config=" + url.QueryEscape(acl) + "&filename=my-config.yaml"
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
@@ -132,7 +153,7 @@ func TestSubIncludeExclude(t *testing.T) {
 		"&config=" + url.QueryEscape(acl) + "&include=" + url.QueryEscape("香港")
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
@@ -157,7 +178,7 @@ func TestSubIncludeExclude(t *testing.T) {
 		"&config=" + url.QueryEscape(acl) + "&exclude=" + url.QueryEscape("香港|日本")
 	req = httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec = httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("全部节点被过滤应 400, got %d", rec.Code)
 	}
@@ -173,7 +194,7 @@ func TestSubHTTPSubscriptionUnavailable(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/sub?target=clash&url="+url.QueryEscape(srv.URL), nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
@@ -204,7 +225,7 @@ func TestSubRulesetUnavailable(t *testing.T) {
 			"&config=" + url.QueryEscape(srv.URL+"/acl.ini")
 		req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 		rec := httptest.NewRecorder()
-		NewHandler().ServeHTTP(rec, req)
+		newTestHandler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusInternalServerError {
 			t.Errorf("target=%s: status = %d, want 500, body: %s", target, rec.Code, rec.Body.String())
 		}
@@ -221,7 +242,7 @@ func TestSubLoonTarget(t *testing.T) {
 		"&config=" + url.QueryEscape(acl)
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
@@ -268,7 +289,7 @@ func TestSubMultiURLMerge(t *testing.T) {
 	q := "target=clash&url=" + url.QueryEscape(srv1.URL+"|"+srv2.URL) + "&config=" + url.QueryEscape(acl)
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
@@ -302,7 +323,7 @@ func TestSubMultiURLFailure(t *testing.T) {
 	q := "target=clash&url=" + url.QueryEscape(srvOK.URL+"|"+srvBad.URL) + "&config=" + url.QueryEscape(acl)
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("任一订阅失败应 400, got %d, body: %s", rec.Code, rec.Body.String())
 	}
@@ -319,7 +340,7 @@ func TestSubURLMixed(t *testing.T) {
 	q := "target=clash&url=" + url.QueryEscape(nodeLink1+"|"+srv.URL) + "&config=" + url.QueryEscape(acl)
 	req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
@@ -340,7 +361,7 @@ func TestSubBadTarget(t *testing.T) {
 	for _, target := range []string{"surge", "quantumult", "ss", ""} {
 		req := httptest.NewRequest(http.MethodGet, "/sub?target="+target+"&url=x", nil)
 		rec := httptest.NewRecorder()
-		NewHandler().ServeHTTP(rec, req)
+		newTestHandler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("target=%q: status = %d, want 400", target, rec.Code)
 			continue
@@ -365,7 +386,7 @@ func TestSubMissingParams(t *testing.T) {
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodGet, "/sub?"+c.query, nil)
 		rec := httptest.NewRecorder()
-		NewHandler().ServeHTTP(rec, req)
+		newTestHandler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400, body: %s", c.name, rec.Code, rec.Body.String())
 		}
@@ -376,10 +397,144 @@ func TestSubMissingParams(t *testing.T) {
 func TestSubMethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/sub?target=clash", nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestSubRejectsUnsafeRemoteAddresses(t *testing.T) {
+	cases := []struct {
+		name, query, want string
+	}{
+		{
+			name:  "订阅 metadata",
+			query: "target=clash&url=" + url.QueryEscape("http://169.254.169.254/latest/meta-data/?token=subscription-secret"),
+			want:  "云 metadata 地址",
+		},
+		{
+			name: "外配置 metadata",
+			query: "target=clash&url=" + url.QueryEscape(nodeLink1) + "&config=" +
+				url.QueryEscape("http://169.254.169.254/latest/meta-data/?token=config-secret"),
+			want: "云 metadata 地址",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/sub?"+tc.query, nil)
+			rec := httptest.NewRecorder()
+			NewHandler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Errorf("错误应说明拒绝原因 %q, body: %s", tc.want, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "secret") {
+				t.Errorf("错误不应回显 query: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubRejectsUnsafeRuleset(t *testing.T) {
+	configURL := "https://config.example/acl.ini"
+	h := newHandler(
+		func(context.Context, string, string, string) (string, map[string]string, error) {
+			return nodeLink1, nil, nil
+		},
+		func(ctx context.Context, rawURL string) (string, error) {
+			if rawURL == configURL {
+				return "[custom]\ncustom_proxy_group=代理`select`.*\nruleset=代理,http://10.0.0.1/rules.list\nruleset=代理,[]FINAL\n", nil
+			}
+			return fetch.FetchText(ctx, rawURL)
+		},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/sub?target=clash&url="+url.QueryEscape("https://subscription.example/sub")+"&config="+url.QueryEscape(configURL), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "私网地址") {
+		t.Errorf("规则集私网地址应明确拒绝，body: %s", rec.Body.String())
+	}
+}
+
+func TestSubConcurrencyLimit(t *testing.T) {
+	for range maxConcurrentConversions {
+		conversionSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range maxConcurrentConversions {
+			<-conversionSlots
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/sub?target=clash&url=x", nil)
+	rec := httptest.NewRecorder()
+	NewHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After = %q, want 1", got)
+	}
+}
+
+func TestSubUsesConversionDeadline(t *testing.T) {
+	var deadline time.Time
+	h := newHandler(
+		func(ctx context.Context, _ string, _, _ string) (string, map[string]string, error) {
+			deadline, _ = ctx.Deadline()
+			return nodeLink1, nil, nil
+		},
+		func(context.Context, string) (string, error) {
+			return "[custom]\ncustom_proxy_group=代理`select`.*\nruleset=代理,[]FINAL\n", nil
+		},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/sub?target=clash&url=https%3A%2F%2Fsubscription.example%2Fsub", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	remaining := time.Until(deadline)
+	if deadline.IsZero() || remaining > conversionTimeout || remaining < conversionTimeout-time.Second {
+		t.Errorf("转换上下文剩余时限 = %s, want 接近 %s", remaining, conversionTimeout)
+	}
+}
+
+func TestExternalConfigUsesRemoteCache(t *testing.T) {
+	configURL := "https://config.example/cache-test.ini"
+	var calls int
+	fetchText := func(context.Context, string) (string, error) {
+		calls++
+		return "[custom]\n", nil
+	}
+	for range 2 {
+		if _, err := loadExternalConfig(context.Background(), configURL, fetchText); err != nil {
+			t.Fatalf("外配置拉取失败: %v", err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("同一外配置应命中缓存，calls = %d", calls)
+	}
+}
+
+func TestSubConversionTimeout(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	rec := httptest.NewRecorder()
+	if err := writeConversionTimeout(rec, ctx); err == nil {
+		t.Fatal("超时上下文应返回错误")
+	}
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "转换超时（60s）") {
+		t.Errorf("超时错误不明确: %s", rec.Body.String())
 	}
 }
 
@@ -390,7 +545,7 @@ func TestAccessLog(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	h := NewHandler()
+	h := newTestHandler()
 
 	// 200 正常请求（httptest.NewRequest 默认 RemoteAddr 192.0.2.1:1234）
 	req := httptest.NewRequest(http.MethodGet, "/version", nil)
@@ -415,14 +570,20 @@ func TestAccessLog(t *testing.T) {
 		}
 	}
 
-	// query 不得落日志（含订阅地址凭据）
-	req = httptest.NewRequest(http.MethodGet, "/sub?target=clash&url=https%3A%2F%2Ftoken-secret%40example.com%2Fsub", nil)
+	// query 不得落日志（订阅、配置、过滤、重命名和代理参数均可携带凭据）
+	requestURL := "/sub?target=clash&url=" + url.QueryEscape("https://token-secret@example.com/sub?subscription-secret") +
+		"&config=" + url.QueryEscape("https://config.example/acl.ini?config-secret") +
+		"&include=include-secret&exclude=exclude-secret&rename=rename-secret%40x&proxy=" +
+		url.QueryEscape("http://proxy-secret.example:8080")
+	req = httptest.NewRequest(http.MethodGet, requestURL, nil)
 	buf.Reset()
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	got := buf.String()
-	if strings.Contains(got, "token-secret") {
-		t.Errorf("访问日志泄露 query 凭据:\n%s", got)
+	for _, secret := range []string{"token-secret", "subscription-secret", "config-secret", "include-secret", "exclude-secret", "rename-secret", "proxy-secret"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("访问日志泄露 query 凭据 %q:\n%s", secret, got)
+		}
 	}
 	if !strings.Contains(got, "GET /sub 400") {
 		t.Errorf("访问日志应记录 /sub 400:\n%s", got)
@@ -433,7 +594,7 @@ func TestAccessLog(t *testing.T) {
 func TestIndexPage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -463,14 +624,14 @@ func TestIndexPage(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodGet, "/not-exist", nil)
 	rec = httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("未知路径 status = %d, want 404", rec.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/", nil)
 	rec = httptest.NewRecorder()
-	NewHandler().ServeHTTP(rec, req)
+	newTestHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST / status = %d, want 405", rec.Code)
 	}

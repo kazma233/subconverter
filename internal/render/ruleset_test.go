@@ -1,6 +1,8 @@
 package render
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,8 +10,29 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"subconv/internal/fetch"
 	"subconv/internal/rule"
 )
+
+func renderTestClient() *fetch.Client {
+	dialer := &net.Dialer{}
+	return fetch.NewClient(fetch.ClientOptions{
+		LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		},
+	})
+}
+
+func renderRulesForTest(acl *rule.ACLConfig) ([]string, error) {
+	return renderRulesWithFetcher(context.Background(), acl, renderTestClient().FetchText)
+}
 
 // startListServer httptest serve 一份本地 .list 样本（模拟远程规则集仓库）。
 func startListServer(t *testing.T) string {
@@ -28,7 +51,7 @@ func startListServer(t *testing.T) string {
 // renderRuleList 渲染规则列表（供本包测试复用）。
 func renderRuleList(t *testing.T, rulesets []rule.RulesetConfig, groups []rule.GroupConfig) []string {
 	t.Helper()
-	rules, err := renderRules(&rule.ACLConfig{Rulesets: rulesets, Groups: groups})
+	rules, err := renderRulesForTest(&rule.ACLConfig{Rulesets: rulesets, Groups: groups})
 	if err != nil {
 		t.Fatalf("渲染规则失败: %v", err)
 	}
@@ -119,7 +142,7 @@ func TestRulesUnknownTypeSkipped(t *testing.T) {
 		_, _ = w.Write([]byte("DOMAIN-SUFFIX,ok.com\nNOT-A-TYPE,bad.com\nUSER-AGENT,also-bad\n"))
 	}))
 	t.Cleanup(srv.Close)
-	rules, err := renderRules(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
+	rules, err := renderRulesForTest(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
 		{Group: "组", Path: srv.URL},
 		{Group: "兜底", Inline: "FINAL"},
 	}})
@@ -143,7 +166,7 @@ func TestFetchRemoteAndCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rules, err := renderRules(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
+	rules, err := renderRulesForTest(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
 		{Group: "远程组", Path: srv.URL},
 		{Group: "远程组", Path: srv.URL}, // 同 URL 第二次引用应命中缓存
 		{Group: "兜底", Inline: "FINAL"},
@@ -170,7 +193,7 @@ func TestFetchRemoteError(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 
-	_, err := renderRules(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
+	_, err := renderRulesForTest(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
 		{Group: "组", Path: srv.URL + "/missing.list"},
 		{Group: "兜底", Inline: "FINAL"},
 	}})

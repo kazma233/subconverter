@@ -84,7 +84,7 @@ func RenderLoon(nodes []model.Proxy, cfg *Config) (string, error) {
 
 	// 规则：复用 Phase 2 的规则装载（本地 .list 展开 + 远程预取），MATCH 统一改写为 FINAL
 	buf.WriteString("\n[Rule]\n")
-	rules, err := renderRules(cfg.ACL)
+	rules, err := renderRulesWithConfig(cfg)
 	if err != nil {
 		return "", err
 	}

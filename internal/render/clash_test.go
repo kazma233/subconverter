@@ -342,7 +342,7 @@ func TestEndToEndMini(t *testing.T) {
 	}
 
 	nodes := loadSampleNodes(t)
-	out, err := RenderClash(nodes, &Config{ACL: acl})
+	out, err := RenderClash(nodes, &Config{ACL: acl, FetchText: renderTestClient().FetchText})
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}

@@ -9,6 +9,7 @@ package render
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,6 +24,10 @@ import (
 // ACL 为 nil 时仅渲染节点段与 MATCH 兜底规则。
 type Config struct {
 	ACL *rule.ACLConfig
+
+	// RequestContext 与 FetchText 只由 HTTP 服务传入，确保规则集下载受整次转换时限约束。
+	RequestContext context.Context
+	FetchText      func(context.Context, string) (string, error)
 
 	// /sub 参数映射的渲染开关（见 C++ interfaces.cpp 参数解析）。
 	// 三态字段 nil = 未设置 = 不强制覆盖 = 沿用节点自身声明。
@@ -125,7 +130,7 @@ func RenderClash(nodes []model.Proxy, cfg *Config) (string, error) {
 	}
 
 	// 规则：加载/下载规则集 → 展开 → 保证尾部 MATCH
-	rules, err := renderRules(cfg.ACL)
+	rules, err := renderRulesWithConfig(cfg)
 	if err != nil {
 		return "", err
 	}

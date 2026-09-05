@@ -1,28 +1,33 @@
 package render
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
-	"time"
 
+	"subconv/internal/fetch"
 	"subconv/internal/rule"
 )
 
-// 远程规则集下载：15s 超时 + 进程内内存缓存（同一 URL 只拉一次）。
+// 远程规则集下载：进程内内存缓存（同一 URL 只拉一次）。
 var (
-	remoteHTTPClient = &http.Client{Timeout: 15 * time.Second}
-
 	remoteCacheMu sync.Mutex
 	remoteCache   = make(map[string]string)
 )
 
-// FetchRemote 下载远程文本（规则集 / 外部配置），带内存缓存与 15s 超时。
-// 供本包规则集装载与 server 侧外部配置下载复用。
-func FetchRemote(url string) (string, error) {
+// FetchRemote 下载远程规则集，带内存缓存与默认下载保护。
+func FetchRemote(ctx context.Context, url string) (string, error) {
+	return FetchRemoteWith(ctx, url, fetch.FetchText)
+}
+
+// FetchRemoteWith 使用调用方指定的下载器拉取远程资产，仍共享进程内缓存。
+func FetchRemoteWith(ctx context.Context, url string, fetchText func(context.Context, string) (string, error)) (string, error) {
+	return fetchRemote(ctx, url, fetchText)
+}
+
+func fetchRemote(ctx context.Context, url string, fetchText func(context.Context, string) (string, error)) (string, error) {
 	remoteCacheMu.Lock()
 	if cached, ok := remoteCache[url]; ok {
 		remoteCacheMu.Unlock()
@@ -30,25 +35,15 @@ func FetchRemote(url string) (string, error) {
 	}
 	remoteCacheMu.Unlock()
 
-	resp, err := remoteHTTPClient.Get(url)
+	content, err := fetchText(ctx, url)
 	if err != nil {
-		return "", fmt.Errorf("下载 %s 失败: %w", url, err)
+		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载 %s 返回状态码 %d", url, resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if err != nil {
-		return "", fmt.Errorf("读取 %s 响应失败: %w", url, err)
-	}
-	content := string(data)
 
 	remoteCacheMu.Lock()
 	remoteCache[url] = content
 	remoteCacheMu.Unlock()
-	// 首次远程拉取才记录（缓存命中保持安静）；URL 为公开规则资产，可全量落日志
-	log.Printf("[fetch] 远程资产拉取 %s: %d字节", url, len(content))
+	log.Printf("[fetch] 远程资产拉取 host=%s %d字节", fetch.URLLabel(url), len(content))
 	return content, nil
 }
 
@@ -62,11 +57,31 @@ var clashRuleTypes = []string{
 
 // renderRules 由 ACL 规则集定义生成 rules 列表：
 //   - 内联规则（[]GEOIP,CN / []FINAL）直接展开
-//   - 远程 https:// 规则集先并发预取（内存缓存、15s 超时），任一失败即返回错误
+//   - 远程 http(s) 规则集先并发预取（内存缓存、受调用方下载时限约束），任一失败即返回错误
 //   - 非 http(s) 规则集路径直接返回错误
 //   - 每条规则展开为 "类型,值,策略[,附加参数]"；无策略的行用所属规则集的组名兜底
 //   - 尾部必带 MATCH 兜底（已有 MATCH 时不重复追加）
 func renderRules(acl *rule.ACLConfig) ([]string, error) {
+	return renderRulesWithFetcher(context.Background(), acl, fetch.FetchText)
+}
+
+func renderRulesWithConfig(cfg *Config) ([]string, error) {
+	ctx := context.Background()
+	if cfg != nil && cfg.RequestContext != nil {
+		ctx = cfg.RequestContext
+	}
+	fetchText := fetch.FetchText
+	if cfg != nil && cfg.FetchText != nil {
+		fetchText = cfg.FetchText
+	}
+	var acl *rule.ACLConfig
+	if cfg != nil {
+		acl = cfg.ACL
+	}
+	return renderRulesWithFetcher(ctx, acl, fetchText)
+}
+
+func renderRulesWithFetcher(ctx context.Context, acl *rule.ACLConfig, fetchText func(context.Context, string) (string, error)) ([]string, error) {
 	rulesets := []rule.RulesetConfig{}
 	var groups []rule.GroupConfig
 	if acl != nil {
@@ -76,7 +91,7 @@ func renderRules(acl *rule.ACLConfig) ([]string, error) {
 	defaultPolicy := pickDefaultPolicy(rulesets, groups)
 
 	// 并发预取远程规则集，避免逐条串行等待超时；规则缺失会改变流量路径，必须让请求失败。
-	if err := prefetchRemoteRulesets(rulesets); err != nil {
+	if err := prefetchRemoteRulesets(ctx, rulesets, fetchText); err != nil {
 		return nil, fmt.Errorf("规则集预取失败: %w", err)
 	}
 
@@ -92,9 +107,9 @@ func renderRules(acl *rule.ACLConfig) ([]string, error) {
 			continue
 		}
 
-		content, err := loadRulesetContent(rs.Path)
+		content, err := loadRulesetContent(ctx, rs.Path, fetchText)
 		if err != nil {
-			return nil, fmt.Errorf("规则集 %q 装载失败: %w", rs.Path, err)
+			return nil, fmt.Errorf("规则集 host=%s 装载失败: %w", fetch.URLLabel(rs.Path), err)
 		}
 		rules = append(rules, parseRulesetLines(content, group)...)
 	}
@@ -131,7 +146,7 @@ func pickDefaultPolicy(rulesets []rule.RulesetConfig, groups []rule.GroupConfig)
 
 // prefetchRemoteRulesets 并发预取所有远程规则集到内存缓存，任一下载失败即返回错误。
 // 按 URL 去重：同一 URL 只发起一次下载，被多个规则集引用时共享缓存。
-func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) error {
+func prefetchRemoteRulesets(ctx context.Context, rulesets []rule.RulesetConfig, fetchText func(context.Context, string) (string, error)) error {
 	urls := make(map[string]bool)
 	for _, rs := range rulesets {
 		if !strings.HasPrefix(rs.Path, "http://") && !strings.HasPrefix(rs.Path, "https://") {
@@ -151,7 +166,7 @@ func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) error {
 		wg.Add(1)
 		go func(url string) {
 			defer wg.Done()
-			if _, err := FetchRemote(url); err != nil {
+			if _, err := fetchRemote(ctx, url, fetchText); err != nil {
 				errs <- err
 			}
 		}(url)
@@ -166,11 +181,11 @@ func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) error {
 
 // loadRulesetContent 装载规则集内容：仅支持 http(s) 远程 URL 下载（带缓存）。
 // 规则资产完全动态，不解析本地文件路径。
-func loadRulesetContent(path string) (string, error) {
+func loadRulesetContent(ctx context.Context, path string, fetchText func(context.Context, string) (string, error)) (string, error) {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return FetchRemote(path)
+		return fetchRemote(ctx, path, fetchText)
 	}
-	return "", fmt.Errorf("规则集路径 %q 非法：仅支持 http(s) URL", path)
+	return "", fmt.Errorf("规则集路径非法：仅支持 http(s) URL")
 }
 
 // parseRulesetLines 解析 .list 规则集文本的每一行：

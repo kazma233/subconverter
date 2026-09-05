@@ -3,15 +3,35 @@ package fetch
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func testClient() *Client {
+	dialer := &net.Dialer{}
+	return NewClient(ClientOptions{
+		LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		},
+	})
+}
 
 // 测试用订阅与流量头样本。
 var (
@@ -31,7 +51,7 @@ func TestFetchSubscriptionBase64WithUserinfo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	content, userinfo, err := FetchSubscription(srv.URL, "", "")
+	content, userinfo, err := testClient().FetchSubscription(context.Background(), srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -58,7 +78,7 @@ func TestFetchSubscriptionCustomUA(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, _, err := FetchSubscription(srv.URL, "v2rayng/1.9.0", ""); err != nil {
+	if _, _, err := testClient().FetchSubscription(context.Background(), srv.URL, "v2rayng/1.9.0", ""); err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
 	if ua, _ := gotUA.Load().(string); ua != "v2rayng/1.9.0" {
@@ -73,7 +93,7 @@ func TestFetchSubscriptionNoUserinfoHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, userinfo, err := FetchSubscription(srv.URL, "", "")
+	_, userinfo, err := testClient().FetchSubscription(context.Background(), srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -99,7 +119,7 @@ func TestFetchSubscriptionGzip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	content, _, err := FetchSubscription(srv.URL, "", "")
+	content, _, err := testClient().FetchSubscription(context.Background(), srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -120,7 +140,7 @@ func TestFetchSubscriptionRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	content, _, err := FetchSubscription(srv.URL, "", "")
+	content, _, err := testClient().FetchSubscription(context.Background(), srv.URL, "", "")
 	if err != nil {
 		t.Fatalf("重试后应成功: %v", err)
 	}
@@ -141,7 +161,7 @@ func TestFetchSubscriptionNon200RetryExhausted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := FetchSubscription(srv.URL, "", "")
+	_, _, err := testClient().FetchSubscription(context.Background(), srv.URL, "", "")
 	if err == nil {
 		t.Fatal("持续 403 应报错")
 	}
@@ -162,13 +182,151 @@ func TestFetchSubscriptionTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &http.Client{Timeout: 50 * time.Millisecond}
-	_, _, err := fetchWithClient(client, srv.URL, "")
+	client := NewClient(ClientOptions{
+		Timeout: 50 * time.Millisecond,
+		LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		},
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		},
+	})
+	_, _, err := client.FetchSubscription(context.Background(), srv.URL, "", "")
 	if err == nil {
 		t.Fatal("超时应报错")
 	}
-	if !strings.Contains(err.Error(), "拉取") {
-		t.Errorf("错误信息应指明拉取失败, got %v", err)
+	if !strings.Contains(err.Error(), "超时") {
+		t.Errorf("错误信息应指明超时, got %v", err)
+	}
+}
+
+func TestClientRejectsUnsafeAddresses(t *testing.T) {
+	cases := []struct {
+		name, rawURL, want string
+	}{
+		{"回环", "http://127.0.0.1/", "回环地址"},
+		{"私网", "http://10.0.0.1/", "私网地址"},
+		{"链路本地", "http://169.254.1.1/", "链路本地地址"},
+		{"云 metadata", "http://169.254.169.254/latest/meta-data/", "云 metadata 地址"},
+	}
+	for _, tc := range cases {
+		_, _, err := FetchSubscription(tc.rawURL, "", "")
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestClientRejectsUnsafeRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "http://169.254.169.254/latest/meta-data/")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	client := NewClient(ClientOptions{
+		LookupIPAddr: func(_ context.Context, host string) ([]net.IPAddr, error) {
+			if host == "169.254.169.254" {
+				return []net.IPAddr{{IP: net.ParseIP(host)}}, nil
+			}
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		},
+		DialContext: testClient().dial,
+	})
+	_, err := client.FetchText(context.Background(), srv.URL+"?token=hidden")
+	if err == nil || !strings.Contains(err.Error(), "云 metadata 地址") {
+		t.Fatalf("重定向到 metadata 应被拒绝，got %v", err)
+	}
+	if strings.Contains(err.Error(), "token=hidden") {
+		t.Errorf("错误不应泄露 query: %v", err)
+	}
+}
+
+func TestClientLimitsConcurrentDownloads(t *testing.T) {
+	started := make(chan struct{}, MaxConcurrentDownloads+1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		started <- struct{}{}
+		<-release
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	client := testClient()
+	errs := make(chan error, MaxConcurrentDownloads+1)
+	for range MaxConcurrentDownloads {
+		go func() {
+			_, err := client.FetchText(context.Background(), srv.URL)
+			errs <- err
+		}()
+	}
+	for range MaxConcurrentDownloads {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("并发下载未在预期时间内发起")
+		}
+	}
+
+	go func() {
+		_, err := client.FetchText(context.Background(), srv.URL)
+		errs <- err
+	}()
+	select {
+	case <-started:
+		t.Fatal("第 17 个下载不应在前 16 个完成前开始")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	for range MaxConcurrentDownloads + 1 {
+		if err := <-errs; err != nil {
+			t.Fatalf("下载失败: %v", err)
+		}
+	}
+}
+
+func TestClientRejectsDNSRebinding(t *testing.T) {
+	lookups := 0
+	client := NewClient(ClientOptions{
+		LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			lookups++
+			if lookups == 1 {
+				return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+			}
+			return []net.IPAddr{{IP: net.ParseIP("10.0.0.1")}}, nil
+		},
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("拨号不应发生")
+		},
+	})
+	_, err := client.FetchText(context.Background(), "http://rebind.example/?token=hidden")
+	if err == nil || !strings.Contains(err.Error(), "域名解析到了私网地址") {
+		t.Fatalf("DNS Rebinding 应在拨号前被拒绝，got %v", err)
+	}
+	if strings.Contains(err.Error(), "token=hidden") {
+		t.Errorf("错误不应泄露 query: %v", err)
+	}
+}
+
+func TestRejectedAddressReason(t *testing.T) {
+	if got := rejectedAddressReason(netip.MustParseAddr("127.0.0.1")); got != "回环地址" {
+		t.Errorf("回环分类 = %q", got)
+	}
+}
+
+func TestURLLabelRemovesCredentialsAndQuery(t *testing.T) {
+	if got := URLLabel("https://token-secret@example.com:8443/sub?query-secret"); got != "example.com" {
+		t.Errorf("URL 标签 = %q, want example.com", got)
+	}
+}
+
+func TestDefaultClientDoesNotUseEnvironmentProxy(t *testing.T) {
+	client := NewClient(ClientOptions{})
+	if client.client.Transport.(*http.Transport).Proxy != nil {
+		t.Error("未传 proxy 参数时不应使用环境代理")
 	}
 }
 

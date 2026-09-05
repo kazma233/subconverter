@@ -580,7 +580,7 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 
 	// route.rules：展开规则集（与 Clash 相同的文本规则，再转 sing-box 结构）
 	var sbRules []singBoxRule
-	ruleLines, err := renderRules(cfg.ACL)
+	ruleLines, err := renderRulesWithConfig(cfg)
 	if err != nil {
 		return "", err
 	}
