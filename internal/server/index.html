@@ -6,8 +6,7 @@
 <title>subconv · 订阅链接生成器</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23f2f5f7'/%3E%3Cpath d='M4 5l4 6 4-6' stroke='%230e9f6e' stroke-width='2' fill='none'/%3E%3C/svg%3E">
 <style>
-  /* 设计基调：终端/utilitarian —— 订阅转换面向的是配置文件，等宽字体贴合使用场景。
-     亮色主题；双色体系：accent(绿) = 结果与主操作，accent-2(青) = 品牌与交互引导，
+  /* 亮色主题；双色体系：accent(绿) = 结果与主操作，accent-2(青) = 品牌与交互引导，
      亮底下两色均加深以保证文字对比度。页面随二进制 embed 分发，所有资源内联，无外部依赖。 */
   :root {
     --bg: #f2f5f7;
@@ -22,14 +21,12 @@
     --accent-2: #0a7fc4;
     --accent-ink: #ffffff;
     --warn: #a15c07;
-    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
   }
   * { box-sizing: border-box; }
   html { color-scheme: light; }
   body {
     margin: 0;
     min-height: 100vh;
-    font-family: var(--mono);
     font-size: 14px;
     line-height: 1.65;
     color: var(--text);
@@ -41,7 +38,7 @@
   .brand { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: .02em; color: var(--accent); }
   .brand b { color: var(--accent-2); }
   .brand-sub { color: var(--muted); font-size: 13px; }
-  .status { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.on { background: var(--accent); animation: pulse 2.4s ease-out infinite; }
   @keyframes pulse {
@@ -49,12 +46,10 @@
     100% { box-shadow: 0 0 0 8px rgba(14,159,110,0); }
   }
 
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 20px; align-items: start; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 22px; }
-  .result { position: sticky; top: 24px; }
+  .result { position: sticky; top: 12px; z-index: 1; order: -1; }
 
-  .field { margin-bottom: 18px; }
-  .field:last-child { margin-bottom: 0; }
   label, .label {
     display: block;
     font-size: 11px;
@@ -65,7 +60,6 @@
   }
   input[type=text], select, textarea {
     width: 100%;
-    font: inherit;
     color: var(--text);
     background: var(--panel-2);
     border: 1px solid var(--border);
@@ -120,7 +114,7 @@
   .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
   .btn {
     display: inline-flex; align-items: center; gap: 7px;
-    font: inherit; font-size: 13px;
+    font-size: 13px;
     color: var(--text); background: transparent;
     border: 1px solid var(--border-strong); border-radius: 6px;
     padding: 9px 16px; cursor: pointer; text-decoration: none;
@@ -138,10 +132,6 @@
   footer a { color: var(--muted); }
   footer a:hover { color: var(--accent-2); }
 
-  @media (max-width: 920px) {
-    .grid { grid-template-columns: 1fr; }
-    .result { position: static; }
-  }
   @media (max-width: 560px) { .row2 { grid-template-columns: 1fr; } }
   @media (prefers-reduced-motion: reduce) {
     .dot.on { animation: none; }
@@ -173,6 +163,7 @@
           <label for="url">url · 订阅地址 / 节点链接</label>
           <textarea id="url" rows="4" placeholder="https://example.com/sub&#10;vless://…（每行一个，可混合）"></textarea>
           <p class="tip">每行一段，多行自动用 | 合并；http(s) 订阅与节点链接可混合。</p>
+          <p class="tip" id="urlHint">url 必填：订阅地址或节点链接至少填一行。</p>
         </div>
 
         <div class="field">
@@ -310,7 +301,6 @@
           <button type="button" class="btn btn-primary" id="copyBtn" disabled>复制链接</button>
           <a class="btn" id="openLink" target="_blank" rel="noopener" aria-disabled="true">打开 ↗</a>
         </div>
-        <p class="tip" id="hint">链接基于当前站点地址生成，可直接粘贴进客户端。</p>
       </div>
       <noscript>
         <p class="tip warn">本页依赖 JavaScript 生成链接；也可直接请求 /sub?target=clash&amp;url=…</p>
@@ -329,7 +319,6 @@
   const linkBox = $('linkBox');
   const copyBtn = $('copyBtn');
   const openLink = $('openLink');
-  const hint = $('hint');
   let currentURL = '';
 
   // filename 占位符跟随 target，减少一处手填
@@ -372,14 +361,12 @@
       copyBtn.disabled = false;
       openLink.href = url;
       openLink.removeAttribute('aria-disabled');
-      hint.textContent = '已按后端参数编码；粘贴进 Clash/Loon/sing-box 客户端即可订阅。';
     } else {
       linkBox.textContent = '填写 url 后自动生成…';
       linkBox.classList.add('empty');
       copyBtn.disabled = true;
       openLink.removeAttribute('href');
       openLink.setAttribute('aria-disabled', 'true');
-      hint.textContent = 'url 必填：订阅地址或节点链接至少填一行。';
     }
     $('filename').placeholder = filenameByTarget[$('target').value] + '（可选）';
   }
