@@ -107,6 +107,9 @@ func (c *Client) FetchSubscription(ctx context.Context, rawURL, ua, proxy string
 			log.Printf("[fetch] 订阅拉取成功 host=%s %d字节 耗时=%s", URLLabel(rawURL), len(content), time.Since(start))
 			return content, parseSubscriptionUserinfo(header.Get("subscription-userinfo")), nil
 		}
+		if errors.Is(err, errResponseTooLarge) {
+			return "", nil, err
+		}
 		if attempt < maxRetries && ctx.Err() == nil && !IsAddressRejected(err) {
 			log.Printf("[fetch] 订阅拉取失败（将重试）: %v", err)
 		}
@@ -130,6 +133,11 @@ func (c *Client) fetchOnce(parent context.Context, rawURL, ua, proxy string) (st
 	ctx, cancel := context.WithTimeout(parent, c.timeout)
 	defer cancel()
 
+	if err := acquireDownload(ctx); err != nil {
+		return "", nil, err
+	}
+	defer releaseDownload()
+
 	if err := c.validateURL(ctx, rawURL); err != nil {
 		return "", nil, err
 	}
@@ -145,11 +153,6 @@ func (c *Client) fetchOnce(parent context.Context, rawURL, ua, proxy string) (st
 	// 由本包统一解压，避免不同下载入口对 gzip 的限制不一致。
 	req.Header.Set("Accept-Encoding", "gzip")
 
-	if err := acquireDownload(ctx); err != nil {
-		return "", nil, err
-	}
-	defer releaseDownload()
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, normalizeFetchError(ctx, err)
@@ -158,12 +161,14 @@ func (c *Client) fetchOnce(parent context.Context, rawURL, ua, proxy string) (st
 	if resp.StatusCode != http.StatusOK {
 		return "", nil, fmt.Errorf("下载返回状态码 %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	content, err := readResponse(resp.Body, resp.Header.Get("Content-Encoding"))
 	if err != nil {
-		return "", nil, normalizeFetchError(ctx, err)
-	}
-	content, err := gunzipIfNeeded(body, resp.Header.Get("Content-Encoding"))
-	if err != nil {
+		if errors.Is(err, errResponseTooLarge) {
+			return "", nil, err
+		}
+		if !strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
+			return "", nil, normalizeFetchError(ctx, err)
+		}
 		return "", nil, fmt.Errorf("下载响应解压失败")
 	}
 	return content, resp.Header, nil
@@ -344,20 +349,69 @@ func RedactURL(text, rawURL string) string {
 	return strings.ReplaceAll(text, rawURL, URLLabel(rawURL))
 }
 
+var errResponseTooLarge = errors.New("下载响应过大")
+
+// readLimited 读取最多 limit 字节；额外读取一个字节，避免 LimitReader 静默截断超长响应。
+func readLimited(r io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, errResponseTooLarge
+	}
+	return body, nil
+}
+
+func readResponse(r io.Reader, contentEncoding string) (string, error) {
+	if !strings.EqualFold(strings.TrimSpace(contentEncoding), "gzip") {
+		body, err := readLimited(r, maxBodySize)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	}
+	return readGzipLimited(r)
+}
+
 func gunzipIfNeeded(body []byte, contentEncoding string) (string, error) {
 	if !strings.EqualFold(strings.TrimSpace(contentEncoding), "gzip") {
 		return string(body), nil
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(body))
+	return readGzipLimited(bytes.NewReader(body))
+}
+
+func readGzipLimited(r io.Reader) (string, error) {
+	compressed := &io.LimitedReader{R: r, N: maxBodySize + 1}
+	zr, err := gzip.NewReader(compressed)
 	if err != nil {
 		return "", err
 	}
-	defer zr.Close()
-	decoded, err := io.ReadAll(zr)
+	decoded, err := readLimited(zr, maxBodySize)
 	if err != nil {
+		_ = zr.Close()
+		return gzipReadError(compressed, err)
+	}
+	if err := zr.Close(); err != nil {
+		return gzipReadError(compressed, err)
+	}
+	if _, err := io.Copy(io.Discard, compressed); err != nil {
 		return "", err
+	}
+	if compressed.N == 0 {
+		return "", errResponseTooLarge
 	}
 	return string(decoded), nil
+}
+
+func gzipReadError(compressed *io.LimitedReader, err error) (string, error) {
+	if _, drainErr := io.Copy(io.Discard, compressed); drainErr != nil {
+		return "", drainErr
+	}
+	if compressed.N == 0 {
+		return "", errResponseTooLarge
+	}
+	return "", err
 }
 
 func parseSubscriptionUserinfo(header string) map[string]string {

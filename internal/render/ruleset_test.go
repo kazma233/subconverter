@@ -2,13 +2,16 @@ package render
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"subconv/internal/fetch"
 	"subconv/internal/rule"
@@ -200,4 +203,136 @@ func TestFetchRemoteError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "状态码 404") {
 		t.Errorf("远程规则集失败应返回包含状态码的错误, got %v", err)
 	}
+}
+
+func TestRemoteCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
+	resetRemoteCache(t)
+
+	now := time.Now()
+	for i := 0; i < maxRemoteCacheEntries; i++ {
+		putCachedRemote(fmt.Sprintf("https://cache.example/%d", i), "x", now.Add(time.Duration(i)*time.Second))
+	}
+	putCachedRemote("https://cache.example/new", "x", now.Add(time.Hour))
+
+	if len(remoteCache) != maxRemoteCacheEntries {
+		t.Fatalf("缓存条目数 = %d, want %d", len(remoteCache), maxRemoteCacheEntries)
+	}
+	if _, ok := getCachedRemote("https://cache.example/0", now.Add(time.Hour)); ok {
+		t.Error("最久未使用的缓存条目应被淘汰")
+	}
+	if content, ok := getCachedRemote("https://cache.example/new", now.Add(time.Hour)); !ok || content != "x" {
+		t.Errorf("新缓存条目应保留, content=%q ok=%t", content, ok)
+	}
+}
+
+func TestRemoteCacheRemovesExpiredEntriesBeforeInsert(t *testing.T) {
+	resetRemoteCache(t)
+	now := time.Now()
+	expiredURL := "https://cache.example/expired"
+	remoteCacheMu.Lock()
+	remoteCache[expiredURL] = remoteCacheEntry{content: "old", cachedAt: now.Add(-remoteCacheTTL), lastUsed: now}
+	remoteCacheBytes = remoteCacheSize(expiredURL, "old")
+	remoteCacheMu.Unlock()
+
+	putCachedRemote("https://cache.example/fresh", "new", now)
+	if _, ok := getCachedRemote(expiredURL, now); ok {
+		t.Error("过期条目不应在新写入后继续占用缓存")
+	}
+	if got, want := remoteCacheBytes, remoteCacheSize("https://cache.example/fresh", "new"); got != want {
+		t.Errorf("缓存字节数 = %d, want %d", got, want)
+	}
+}
+
+func TestFetchRemoteCoalescesConcurrentRequests(t *testing.T) {
+	resetRemoteCache(t)
+	const url = "https://cache.example/shared"
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ready := make(chan struct{}, 2)
+	goFetch := make(chan struct{})
+	var calls atomic.Int32
+	fetchText := func(context.Context, string) (string, error) {
+		calls.Add(1)
+		close(started)
+		<-release
+		return "DOMAIN-SUFFIX,shared.example\n", nil
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-goFetch
+			_, err := fetchRemote(context.Background(), url, fetchText)
+			errs <- err
+		}()
+	}
+	<-ready
+	<-ready
+	close(goFetch)
+	<-started
+	time.Sleep(20 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("同 URL 并发请求数 = %d, want 1", got)
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("并发下载失败: %v", err)
+		}
+	}
+}
+
+func TestPrefetchRemoteRulesetsLimitsWorkers(t *testing.T) {
+	resetRemoteCache(t)
+	rulesets := make([]rule.RulesetConfig, fetch.MaxConcurrentDownloads+1)
+	for i := range rulesets {
+		rulesets[i] = rule.RulesetConfig{Path: fmt.Sprintf("https://cache.example/%d", i)}
+	}
+	started := make(chan struct{}, fetch.MaxConcurrentDownloads+1)
+	release := make(chan struct{})
+	fetchText := func(context.Context, string) (string, error) {
+		started <- struct{}{}
+		<-release
+		return "DOMAIN-SUFFIX,example.com\n", nil
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- prefetchRemoteRulesets(context.Background(), rulesets, fetchText)
+	}()
+	for range fetch.MaxConcurrentDownloads {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("预取任务未在预期时间内启动")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("预取任务超过并发上限")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("预取失败: %v", err)
+	}
+}
+
+func resetRemoteCache(t *testing.T) {
+	t.Helper()
+	remoteCacheMu.Lock()
+	previousCache, previousBytes := remoteCache, remoteCacheBytes
+	remoteCache = make(map[string]remoteCacheEntry)
+	remoteCacheBytes = 0
+	remoteCacheMu.Unlock()
+	t.Cleanup(func() {
+		remoteCacheMu.Lock()
+		remoteCache, remoteCacheBytes = previousCache, previousBytes
+		remoteCacheMu.Unlock()
+	})
 }

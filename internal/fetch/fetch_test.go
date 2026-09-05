@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -125,6 +126,59 @@ func TestFetchSubscriptionGzip(t *testing.T) {
 	}
 	if content != base64Sub {
 		t.Errorf("gzip 响应应解压为原始 base64 订阅, got %q", truncate(content, 60))
+	}
+}
+
+func TestReadLimitedRejectsOversizedResponse(t *testing.T) {
+	_, err := readLimited(strings.NewReader("12345"), 4)
+	if !errors.Is(err, errResponseTooLarge) {
+		t.Fatalf("超长响应应被拒绝, got %v", err)
+	}
+}
+
+func TestReadResponseRejectsOversizedGzipResponse(t *testing.T) {
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write(bytes.Repeat([]byte("x"), maxBodySize+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readResponse(&compressed, "gzip")
+	if !errors.Is(err, errResponseTooLarge) {
+		t.Fatalf("超长 gzip 响应应被拒绝, got %v", err)
+	}
+}
+
+func TestReadResponseRejectsOversizedCompressedGzipResponse(t *testing.T) {
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write([]byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := io.MultiReader(&compressed, bytes.NewReader(bytes.Repeat([]byte("x"), maxBodySize)))
+	_, err := readResponse(response, "gzip")
+	if !errors.Is(err, errResponseTooLarge) {
+		t.Fatalf("压缩前超长 gzip 响应应被拒绝, got %v", err)
+	}
+}
+
+func TestGunzipIfNeededRejectsOversizedDecodedResponse(t *testing.T) {
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write(bytes.Repeat([]byte("x"), maxBodySize+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := gunzipIfNeeded(compressed.Bytes(), "gzip")
+	if !errors.Is(err, errResponseTooLarge) {
+		t.Fatalf("解压后的超长响应应被拒绝, got %v", err)
 	}
 }
 
