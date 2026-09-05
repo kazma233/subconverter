@@ -5,7 +5,7 @@
 Go 版 subconverter 相对 C++ 原版存在两大缺口：
 
 1. **输出格式**：仅支持 Clash YAML 和 Loon conf，缺少 sing-box JSON（当前移动端/旁路由主流客户端）
-2. **/sub 参数**：仅支持 target/url/config/filename/ua/include/exclude 7 个参数，缺少 emoji/udp/tfo/scv/list/new\_name/sort/depr/proxy/folder 等常用开关
+2. **/sub 参数**：仅支持 target/url/config/filename/ua/include/exclude 7 个参数，缺少 emoji/udp/tfo/scv/list/sort/depr/proxy/folder 等常用开关
 
 本次迭代补齐这两块，不引入配置系统/脚本/cron 等更大范围功能。
 
@@ -21,7 +21,7 @@ Go 版 subconverter 相对 C++ 原版存在两大缺口：
 
 - **REALITY**：VLESS 写 `tls.reality.{public_key, short_id}` + `tls.utls.{enabled, fingerprint}`
 
-- **策略组**：Select→selector；URLTest/Fallback→urltest；LoadBalance→selector 退避（sing-box 1.10 无 loadbalance 出站）
+- **策略组**：Select→selector；URLTest/Fallback/LoadBalance→urltest。sing-box 没有 load-balance 出站，LoadBalance 的轮询/一致性哈希语义无法表达。
 
 - **规则**：复用 `renderRules(cfg.ACL)` 展开 Clash 文本规则，再经 `sbBuildRule` 转为 sing-box `route.rules` 结构（DOMAIN/SUFFIX/KEYWORD、IP-CIDR、GEOIP、PORT、PROCESS-NAME）
 
@@ -36,7 +36,6 @@ Go 版 subconverter 相对 C++ 原版存在两大缺口：
 | tfo       | 三态，Clash 输出 fast-open、Loon 输出 fast-open=, sing-box 走各节点    | clash.go/loon.go                  |
 | scv       | 三态（别名 skip-cert-verify），输出 skip-cert-verify / tls.insecure | clash.go/loon.go/singbox.go       |
 | list      | true 只输出节点段，跳过 base/groups/rules                           | clash.go/loon.go/singbox.go       |
-| new\_name | nil/true → Clash 写 sni（新字段）；false → servername（旧兼容）        | clash.go `clashSNIField`          |
 | sort      | true 按节点名字典序升序                                             | preprocess.go                     |
 | depr      | true（别名 fdn）过滤 SS chacha20 等废弃加密                           | preprocess.go                     |
 | proxy     | 非空时作为 HTTP/SOCKS5 代理拉取订阅                                   | fetch.go `FetchSubscription`      |
@@ -61,7 +60,7 @@ model.Proxy 的 UDP/TCPFastOpen/SkipCertVerify 改为 `*bool`：
 
 - **不做本地 pref 配置系统**：config 参数仍只接受 http(s) URL，不读本地文件
 
-- **不做规则集本地 .list 文件**：`loadRulesetContent` 只支持 http(s) URL，本地路径报错跳过
+- **不做规则集本地 .list 文件**：`loadRulesetContent` 只支持 http(s) URL，本地路径直接返回错误
 
 - **不做脚本引擎**：排序/过滤/重命名用内置规则表实现，不支持 QuickJS/ChaiScript
 

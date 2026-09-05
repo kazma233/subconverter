@@ -326,16 +326,16 @@ func TestConvertUnsupportedTarget(t *testing.T) {
 }
 
 // TestEndToEndMini 端到端：testdata 样本 → testdata/acl_mini.ini（纯远程
-// ruleset + 内联）→ RenderClash。远程规则集用 httptest 供 lan.list 样本，
-// 网络失败自动跳过不影响断言；三段齐全 + MATCH 兜底必须成立。
+// ruleset + 内联）→ RenderClash。所有远程规则集均由 httptest 提供 lan.list 样本，
+// 三段齐全 + MATCH 兜底必须成立。
 func TestEndToEndMini(t *testing.T) {
 	aclData, err := os.ReadFile("../../testdata/acl_mini.ini")
 	if err != nil {
 		t.Fatalf("读取测试配置失败: %v", err)
 	}
-	// 把 ini 中 example.com 的远程 ruleset 替换为本地 httptest 地址
+	// 把 ini 中所有远程规则集替换为本地 httptest 地址，避免依赖公网。
 	listURL := startListServer(t)
-	aclData = []byte(strings.ReplaceAll(string(aclData), "https://example.com/rules/LocalAreaNetwork.list", listURL))
+	aclData = []byte(strings.ReplaceAll(string(aclData), "https://example.com/rules/", listURL+"/"))
 	acl, err := rule.ParseINI(string(aclData))
 	if err != nil {
 		t.Fatalf("解析配置失败: %v", err)
@@ -357,9 +357,9 @@ func TestEndToEndMini(t *testing.T) {
 	if len(doc.Groups) != 5 {
 		t.Fatalf("proxy-groups 数 = %d, want 5", len(doc.Groups))
 	}
-	if len(doc.Rules) < 7 {
-		// lan.list 5 条 + GEOIP + MATCH ≥ 7（其余 example.com ruleset 网络失败跳过）
-		t.Fatalf("rules 数 = %d, want ≥ 7", len(doc.Rules))
+	if len(doc.Rules) < 47 {
+		// 9 份 lan.list 各 5 条 + GEOIP + MATCH。
+		t.Fatalf("rules 数 = %d, want ≥ 47", len(doc.Rules))
 	}
 	last := doc.Rules[len(doc.Rules)-1]
 	if !strings.HasPrefix(last, "MATCH,") {

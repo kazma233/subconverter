@@ -15,17 +15,29 @@ import (
 	"subconv/internal/parser"
 )
 
-// setupACL 注入外配置动态拉取环境：httptest 服务器 serve 测试样本
-// testdata/acl_mini.ini，返回该 ini 的完整 URL（config 参数只支持完整 URL）。
+// setupACL 注入外配置与规则集动态拉取环境，避免成功链路依赖公网。
 func setupACL(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, err := os.ReadFile("../../testdata/acl_mini.ini")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		switch {
+		case r.URL.Path == "/acl_mini.ini":
+			data, err := os.ReadFile("../../testdata/acl_mini.ini")
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			content := strings.ReplaceAll(string(data), "https://example.com/rules/", "http://"+r.Host+"/rules/")
+			_, _ = w.Write([]byte(content))
+		case strings.HasPrefix(r.URL.Path, "/rules/"):
+			data, err := os.ReadFile("../../testdata/lan.list")
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(data)
+		default:
+			http.NotFound(w, r)
 		}
-		_, _ = w.Write(data)
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL + "/acl_mini.ini"
@@ -83,9 +95,8 @@ func TestSubClashFullChain(t *testing.T) {
 	if len(doc.Groups) != 5 {
 		t.Fatalf("proxy-groups 数 = %d, want 5（acl_mini.ini）", len(doc.Groups))
 	}
-	// GEOIP 内联规则始终存在（example.com ruleset 网络失败跳过）
-	if len(doc.Rules) < 2 {
-		t.Fatalf("rules 数 = %d, want ≥ 2（GEOIP + MATCH）", len(doc.Rules))
+	if len(doc.Rules) < 47 {
+		t.Fatalf("rules 数 = %d, want ≥ 47（9 份规则集 + GEOIP + MATCH）", len(doc.Rules))
 	}
 	if last := doc.Rules[len(doc.Rules)-1]; last != "MATCH,🐟 漏网之鱼" {
 		t.Errorf("MATCH 兜底 = %q", last)
@@ -169,6 +180,37 @@ func TestSubHTTPSubscriptionUnavailable(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "500") {
 		t.Errorf("错误信息应包含状态码 500, got %q", body)
+	}
+}
+
+// TestSubRulesetUnavailable 三种输出共用规则集渲染链路；任一规则集失败必须返回错误，
+// 不能生成少规则的配置后继续返回 200。
+func TestSubRulesetUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/acl.ini":
+			_, _ = w.Write([]byte("[custom]\n" +
+				"custom_proxy_group=代理`select`.*\n" +
+				"ruleset=代理,http://" + r.Host + "/missing.list\n" +
+				"ruleset=代理,[]FINAL\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	for _, target := range []string{"clash", "loon", "singbox"} {
+		q := "target=" + target + "&url=" + url.QueryEscape(nodeLink1) +
+			"&config=" + url.QueryEscape(srv.URL+"/acl.ini")
+		req := httptest.NewRequest(http.MethodGet, "/sub?"+q, nil)
+		rec := httptest.NewRecorder()
+		NewHandler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("target=%s: status = %d, want 500, body: %s", target, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "规则集预取失败") {
+			t.Errorf("target=%s: 错误应说明规则集预取失败，body: %s", target, rec.Body.String())
+		}
 	}
 }
 
@@ -409,6 +451,9 @@ func TestIndexPage(t *testing.T) {
 	}
 	if !strings.Contains(body, "/sub") {
 		t.Error("页面应生成 /sub 链接")
+	}
+	if strings.Contains(body, "new_name") {
+		t.Error("页面不应保留已删除的 new_name 参数")
 	}
 	// 默认预设须直接携带完整 URL（页面只读展示 + 生成链接都依赖它）
 	defaultACL := "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Online_Full.ini"

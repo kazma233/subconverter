@@ -43,7 +43,6 @@ go build -o subconv . && ./subconv          # 默认监听 :25600
 | `tfo` | 否 | 按节点自身 | 全局开关 TCP Fast Open：`true` 全开、`false` 全关、不填按节点自己的设置 |
 | `scv` | 否 | 按节点自身 | 全局开关跳过证书校验（别名 `skip-cert-verify`）：`true` 跳过、`false` 不跳、不填按节点自己的设置。自签证书或抓包时用 |
 | `list` | 否 | `false` | `true` = 只输出节点列表，不要基础配置、策略组和规则。适合自己手动合并配置的场景 |
-| `new_name` | 否 | `true` | Clash 字段名：`true` 用新名 `sni`，`false` 用旧名 `servername`（老内核兼容） |
 | `sort` | 否 | `false` | `true` 按节点名字母排序 |
 | `depr` | 否 | `false` | `true`（别名 `fdn`）过滤掉已废弃的加密方式（比如 SS 的 `chacha20`，新版 Clash.Meta（mihomo）不认） |
 | `proxy` | 否 | 直连 | 拉取订阅时走的代理，填 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080` 这种 |
@@ -51,6 +50,8 @@ go build -o subconv . && ./subconv          # 默认监听 :25600
 | `rename` | 否 | — | 自定义改名：`旧名@新名`，多组用 `@@` 隔开，比如 `香港@HK@@日本@JP` |
 
 如果订阅响应带了流量信息（`subscription-userinfo` 头），会原样透传给客户端，方便看用了多少流量。
+
+Clash 的 TLS SNI 字段由协议决定：vless/vmess 固定输出 mihomo 所需的 `servername`，trojan/hysteria2/anytls 保持 `sni`；不再提供 `new_name` 切换。
 
 示例：
 

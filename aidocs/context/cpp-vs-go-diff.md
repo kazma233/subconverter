@@ -101,7 +101,7 @@ C++ 用 tribool（未设置/true/false）区分"没传参数"和"显式关掉"�
 | emoji / add_emoji / remove_emoji | 给节点名加国旗 emoji 或去 emoji，让列表更好认 | 有 |
 | udp / tfo / scv | 全局开关 UDP 转发/TCP Fast Open/跳过证书校验，三态 | 有 |
 | list | 只输出节点列表不输出完整配置，自己手动合并用 | 有 |
-| new_name | Clash 字段名新旧写法切换，老内核兼容 | 有 |
+| new_name | Clash 字段名新旧写法切换，老内核兼容 | 已移除：mihomo 的字段名按协议固定，切换会导致 vless/vmess SNI 被忽略 |
 | sort / fdn | 按名字排序 / 过滤已废弃加密方式 | 有 |
 | proxy / folder / rename | 拉取时走代理 / 节点名加前缀 / 自定义改名 | 有 |
 | expand | 控制策略组是否展开所有节点到组里（vs 只引用组名） | 缺失 |
@@ -185,7 +185,7 @@ C++ 版可以配置定时任务，按 cron 表达式定期自动执行转换并�
 | Select | 手动选哪个节点用，最常用 | 已实现 |
 | URLTest | 自动测速选最快的节点，省心 | 已实现 |
 | Fallback | 按顺序用，当前节点挂了自动切下一个，保证可用性 | 已实现 |
-| LoadBalance | 多个节点轮流用，分摊流量压力 | 已实现（sing-box 退避为 selector） |
+| LoadBalance | 多个节点轮流用，分摊流量压力 | Clash/Loon 已实现；sing-box 映射为 urltest 自动选优，不支持轮询或一致性哈希语义 |
 | Relay | 链式中继：A 节点连 B 节点再连目标，多跳加密提升匿名性 | 缺失 |
 | SSID | 根据连的 Wi-Fi 名字自动切换策略（在家直连、在外走代理） | 缺失 |
 | Smart | 智能选择，综合延迟和稳定性选节点 | 缺失 |

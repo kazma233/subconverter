@@ -35,15 +35,15 @@ func renderRuleList(t *testing.T, rulesets []rule.RulesetConfig, groups []rule.G
 	return rules
 }
 
-// TestRulesLocalListFile 远程 .list 装载：注释跳过、no-resolve 附加参数保留、策略组兜底。
-func TestRulesLocalListFile(t *testing.T) {
+// TestRulesRemoteList 远程 .list 装载：注释跳过、no-resolve 附加参数保留、策略组兜底。
+func TestRulesRemoteList(t *testing.T) {
 	listURL := startListServer(t)
 	rules := renderRuleList(t,
 		[]rule.RulesetConfig{{Group: "🎯 全球直连", Path: listURL}},
 		nil,
 	)
 	if len(rules) == 0 {
-		t.Fatal("本地规则集渲染结果为空")
+		t.Fatal("远程规则集渲染结果为空")
 	}
 	// 抽查典型规则
 	joined := "\n" + strings.Join(rules, "\n") + "\n"
@@ -85,14 +85,14 @@ func TestRulesInlineRules(t *testing.T) {
 	}
 }
 
-// TestRulesMissingFileSkipped 文件不存在：跳过并记日志，不返回 error。
-func TestRulesMissingFileSkipped(t *testing.T) {
-	rules := renderRuleList(t, []rule.RulesetConfig{
+// TestRulesMissingFileFails 文件不存在：规则缺失必须让渲染失败。
+func TestRulesMissingFileFails(t *testing.T) {
+	_, err := renderRules(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
 		{Group: "组", Path: "http://127.0.0.1:1/rules/不存在/NoSuchFile.list"},
 		{Group: "兜底", Inline: "FINAL"},
-	}, nil)
-	if len(rules) != 1 || rules[0] != "MATCH,兜底" {
-		t.Errorf("缺失文件应被跳过, 规则 = %v", rules)
+	}})
+	if err == nil || !strings.Contains(err.Error(), "规则集") {
+		t.Fatalf("缺失规则集应返回错误, got %v", err)
 	}
 }
 
@@ -165,19 +165,16 @@ func TestFetchRemoteAndCache(t *testing.T) {
 	}
 }
 
-// TestFetchRemoteError 非法路径协议 → 404 → 跳过。
+// TestFetchRemoteError 远程规则集返回 404 时必须报错。
 func TestFetchRemoteError(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 
-	rules, err := renderRules(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
+	_, err := renderRules(&rule.ACLConfig{Rulesets: []rule.RulesetConfig{
 		{Group: "组", Path: srv.URL + "/missing.list"},
 		{Group: "兜底", Inline: "FINAL"},
 	}})
-	if err != nil {
-		t.Fatalf("远程失败应跳过而非报错: %v", err)
-	}
-	if len(rules) != 1 || rules[0] != "MATCH,兜底" {
-		t.Errorf("失败远程规则集应被跳过, got %v", rules)
+	if err == nil || !strings.Contains(err.Error(), "状态码 404") {
+		t.Errorf("远程规则集失败应返回包含状态码的错误, got %v", err)
 	}
 }

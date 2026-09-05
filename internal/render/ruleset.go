@@ -62,8 +62,8 @@ var clashRuleTypes = []string{
 
 // renderRules 由 ACL 规则集定义生成 rules 列表：
 //   - 内联规则（[]GEOIP,CN / []FINAL）直接展开
-//   - 本地 .list（base 目录相对路径）逐行装载；文件不存在跳过并记日志
-//   - 远程 https:// 规则集先并发预取（内存缓存、15s 超时），失败跳过并记日志
+//   - 远程 https:// 规则集先并发预取（内存缓存、15s 超时），任一失败即返回错误
+//   - 非 http(s) 规则集路径直接返回错误
 //   - 每条规则展开为 "类型,值,策略[,附加参数]"；无策略的行用所属规则集的组名兜底
 //   - 尾部必带 MATCH 兜底（已有 MATCH 时不重复追加）
 func renderRules(acl *rule.ACLConfig) ([]string, error) {
@@ -75,8 +75,10 @@ func renderRules(acl *rule.ACLConfig) ([]string, error) {
 	}
 	defaultPolicy := pickDefaultPolicy(rulesets, groups)
 
-	// 并发预取远程规则集，避免逐条串行等待超时
-	prefetchRemoteRulesets(rulesets)
+	// 并发预取远程规则集，避免逐条串行等待超时；规则缺失会改变流量路径，必须让请求失败。
+	if err := prefetchRemoteRulesets(rulesets); err != nil {
+		return nil, fmt.Errorf("规则集预取失败: %w", err)
+	}
 
 	var rules []string
 	for _, rs := range rulesets {
@@ -92,9 +94,7 @@ func renderRules(acl *rule.ACLConfig) ([]string, error) {
 
 		content, err := loadRulesetContent(rs.Path)
 		if err != nil {
-			// 文件不存在/下载失败：跳过并记日志（不 fail，对齐 C++ 行为）
-			log.Printf("规则集 %q 装载失败，已跳过: %v", rs.Path, err)
-			continue
+			return nil, fmt.Errorf("规则集 %q 装载失败: %w", rs.Path, err)
 		}
 		rules = append(rules, parseRulesetLines(content, group)...)
 	}
@@ -129,9 +129,9 @@ func pickDefaultPolicy(rulesets []rule.RulesetConfig, groups []rule.GroupConfig)
 	return "DIRECT"
 }
 
-// prefetchRemoteRulesets 并发预取所有远程规则集到内存缓存（失败静默，由后续装载阶段记日志）。
+// prefetchRemoteRulesets 并发预取所有远程规则集到内存缓存，任一下载失败即返回错误。
 // 按 URL 去重：同一 URL 只发起一次下载，被多个规则集引用时共享缓存。
-func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) {
+func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) error {
 	urls := make(map[string]bool)
 	for _, rs := range rulesets {
 		if !strings.HasPrefix(rs.Path, "http://") && !strings.HasPrefix(rs.Path, "https://") {
@@ -140,6 +140,7 @@ func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) {
 		urls[rs.Path] = true
 	}
 	var wg sync.WaitGroup
+	errs := make(chan error, len(urls))
 	for url := range urls {
 		remoteCacheMu.Lock()
 		_, cached := remoteCache[url]
@@ -148,12 +149,19 @@ func prefetchRemoteRulesets(rulesets []rule.RulesetConfig) {
 			continue
 		}
 		wg.Add(1)
-		go func() {
+		go func(url string) {
 			defer wg.Done()
-			_, _ = FetchRemote(url)
-		}()
+			if _, err := FetchRemote(url); err != nil {
+				errs <- err
+			}
+		}(url)
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		return err
+	}
+	return nil
 }
 
 // loadRulesetContent 装载规则集内容：仅支持 http(s) 远程 URL 下载（带缓存）。

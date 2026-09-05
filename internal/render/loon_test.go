@@ -215,14 +215,14 @@ func TestRenderLoonNoACL(t *testing.T) {
 
 // TestRenderLoonEndToEndMini testdata 23 节点 + testdata/acl_mini.ini 端到端：
 // 23 行 Proxy、5 行策略组、url-test 组语法、GEOIP 内联规则与 FINAL 兜底。
-// 远程 ruleset 中 LocalAreaNetwork 换成 httptest（lan.list 样本），其余网络失败跳过。
+// 所有远程 ruleset 均换成 httptest（lan.list 样本）。
 func TestRenderLoonEndToEndMini(t *testing.T) {
 	aclData, err := os.ReadFile("../../testdata/acl_mini.ini")
 	if err != nil {
 		t.Fatalf("读取配置失败: %v", err)
 	}
 	listURL := startListServer(t)
-	aclData = []byte(strings.ReplaceAll(string(aclData), "https://example.com/rules/LocalAreaNetwork.list", listURL))
+	aclData = []byte(strings.ReplaceAll(string(aclData), "https://example.com/rules/", listURL+"/"))
 	acl, err := rule.ParseINI(string(aclData))
 	if err != nil {
 		t.Fatalf("解析配置失败: %v", err)

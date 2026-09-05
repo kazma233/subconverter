@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"subconv/internal/model"
+	"subconv/internal/rule"
 )
 
 // 辅助：构建最简单的节点切片
@@ -46,12 +47,12 @@ func buildSingTestNodes() []model.Proxy {
 			TLSSecure: true,
 		},
 		{
-			Type:       model.TypeSS,
-			Name:       "ss-01 美西",
-			Server:     "us.example.com",
-			Port:       8388,
-			Cipher:     "aes-128-gcm",
-			Password:   "ss-pass",
+			Type:           model.TypeSS,
+			Name:           "ss-01 美西",
+			Server:         "us.example.com",
+			Port:           8388,
+			Cipher:         "aes-128-gcm",
+			Password:       "ss-pass",
 			SkipCertVerify: nil,
 		},
 	}
@@ -106,10 +107,13 @@ func TestRenderSingBox_Basic(t *testing.T) {
 	if v := hy2["down_mbps"]; v.(float64) != 500 {
 		t.Errorf("hysteria2 down_mbps = %v", v)
 	}
-	// server_ports 范围写法 → 解析为两端
+	// server_ports 必须保留完整范围，并且不能与 server_port 同时出现。
 	ports, ok := hy2["server_ports"].([]any)
-	if !ok || len(ports) < 2 {
+	if !ok || len(ports) != 1 || ports[0] != "20000:40000" {
 		t.Errorf("hysteria2 server_ports = %v", hy2["server_ports"])
+	}
+	if _, ok := hy2["server_port"]; ok {
+		t.Errorf("存在 server_ports 时不应输出 server_port: %v", hy2)
 	}
 	// obfs salamander + password
 	obfs, ok := hy2["obfs"].(map[string]any)
@@ -170,6 +174,62 @@ func TestRenderSingBox_Basic(t *testing.T) {
 	}
 }
 
+func TestSBSplitPortRanges(t *testing.T) {
+	got := sbSplitPortRanges("2080:3000, 4000-5000, 6000")
+	want := []string{"2080:3000", "4000:5000", "6000"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("端口范围 = %v, want %v", got, want)
+	}
+	got = sbSplitPortRanges(":, -, 1:2:3, 0, 65536, 99:98, 200")
+	if len(got) != 1 || got[0] != "200" {
+		t.Errorf("非法端口范围应被忽略，got %v", got)
+	}
+}
+
+// TestRenderSingBoxLoadBalanceAndUnknownRuleTarget 确保 load-balance 保留自动选择，
+// 并且规则不会引用未生成的 outbound。
+func TestRenderSingBoxLoadBalanceAndUnknownRuleTarget(t *testing.T) {
+	acl := &rule.ACLConfig{
+		Groups: []rule.GroupConfig{{
+			Name: "负载均衡", Type: rule.GroupLoadBalance, Items: []string{".*"},
+			URL: "https://example.com/generate_204", Interval: 120, Tolerance: 50,
+		}},
+		Rulesets: []rule.RulesetConfig{
+			{Group: "不存在的组", Inline: "DOMAIN,example.com"},
+			{Group: "hy2-01 香港", Inline: "DOMAIN,node.example.com"},
+			{Group: "负载均衡", Inline: "FINAL"},
+		},
+	}
+	out, err := RenderSingBox(buildSingTestNodes(), &Config{ACL: acl})
+	if err != nil {
+		t.Fatalf("RenderSingBox 失败: %v", err)
+	}
+	var root singBoxConfig
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("sing-box JSON 反序列化失败: %v", err)
+	}
+	var loadBalance map[string]any
+	for _, raw := range root.Outbounds {
+		var outbound map[string]any
+		if json.Unmarshal(raw, &outbound) == nil && outbound["tag"] == "负载均衡" {
+			loadBalance = outbound
+			break
+		}
+	}
+	if loadBalance == nil {
+		t.Fatal("缺少负载均衡出站")
+	}
+	if loadBalance["type"] != "urltest" || loadBalance["url"] != "https://example.com/generate_204" || loadBalance["interval"] != "120s" || loadBalance["tolerance"] != float64(50) {
+		t.Errorf("load-balance 输出未保留自动选择字段: %+v", loadBalance)
+	}
+	if len(root.Route.Rules) == 0 || root.Route.Rules[0].Outbound != "proxy" {
+		t.Errorf("未知规则策略组必须回退至 proxy: %+v", root.Route.Rules)
+	}
+	if len(root.Route.Rules) < 2 || root.Route.Rules[1].Outbound != "hy2-01 香港" {
+		t.Errorf("已生成节点 tag 必须保留: %+v", root.Route.Rules)
+	}
+}
+
 // TestRenderSingBox_NodeList 仅输出 outbounds 数组，无顶层包裹
 func TestRenderSingBox_NodeList(t *testing.T) {
 	nodes := buildSingTestNodes()
@@ -200,7 +260,7 @@ func TestRenderSingBox_NodeList(t *testing.T) {
 func TestApplySubOverrides_All(t *testing.T) {
 	nodes := []model.Proxy{
 		{Type: model.TypeSS, Name: "🇺🇸 US-01 美西GIA", Server: "a", Port: 1, Cipher: "aes-128-gcm"},
-		{Type: model.TypeSS, Name: "HK-01", Server: "b", Port: 2, Cipher: "chacha20"}, // 会被 depr 过滤
+		{Type: model.TypeSS, Name: "HK-01", Server: "b", Port: 2, Cipher: "chacha20"},    // 会被 depr 过滤
 		{Type: model.TypeTrojan, Name: "B-Japan", Server: "c", Port: 443, Password: "x"}, // sort 后应为 "日本"标签
 	}
 	scv := true

@@ -57,7 +57,7 @@ type singBoxRule struct {
 // ---------- helpers ----------
 
 // triString 仅当指针非 nil 且为 true 返回 "true" 串，供 JSON 布尔字段判断。
-func triTrue(b *bool) bool { return b != nil && *b }
+func triTrue(b *bool) bool  { return b != nil && *b }
 func triFalse(b *bool) bool { return b != nil && !*b }
 
 // sbServerName 决策 tls.server_name：优先 SNI，次选 Host，空返回空串（不写）。
@@ -68,41 +68,42 @@ func sbServerName(p *model.Proxy) string {
 	return ""
 }
 
-// sbSplitPorts 把 ports 字符串（"2080:3000" / "2000,3000,4000"）拆成数字切片。
-// 失败或为空时返回 nil。
-func sbSplitPorts(s string) []uint16 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	sep := ","
-	if strings.Contains(s, ":") && !strings.Contains(s, ",") {
-		sep = ":"
-	}
-	var out []uint16
-	for _, part := range strings.Split(s, sep) {
+// sbSplitPortRanges 校验并标准化 Hysteria2 端口范围。sing-box 的 server_ports
+// 使用字符串范围而非端口数字数组，保留范围才不会丢失中间端口。
+func sbSplitPortRanges(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 1 || n > 65535 {
-			// "1000-2000" 范围写法简化成单独 1000 起始/终止两个端口，避免解析复杂
-			if strings.Contains(part, "-") {
-				ps := strings.SplitN(part, "-", 2)
-				a, e1 := strconv.Atoi(strings.TrimSpace(ps[0]))
-				b, e2 := strconv.Atoi(strings.TrimSpace(ps[1]))
-				if e1 == nil && e2 == nil && a > 0 && a <= 65535 && b > 0 && b <= 65535 {
-					out = append(out, uint16(a), uint16(b))
-					continue
-				}
+		sep := ""
+		if strings.Contains(part, ":") {
+			sep = ":"
+		} else if strings.Contains(part, "-") {
+			sep = "-"
+		}
+
+		bounds := []string{part}
+		if sep != "" {
+			bounds = strings.Split(part, sep)
+			if len(bounds) != 2 || strings.Contains(bounds[1], ":") || strings.Contains(bounds[1], "-") {
+				continue
 			}
+		}
+		start, err := strconv.Atoi(strings.TrimSpace(bounds[0]))
+		if err != nil || start < 1 || start > 65535 {
 			continue
 		}
-		out = append(out, uint16(n))
-	}
-	if len(out) == 0 {
-		return nil
+		if len(bounds) == 1 {
+			out = append(out, strconv.Itoa(start))
+			continue
+		}
+		end, err := strconv.Atoi(strings.TrimSpace(bounds[1]))
+		if err != nil || end < start || end > 65535 {
+			continue
+		}
+		out = append(out, strconv.Itoa(start)+":"+strconv.Itoa(end))
 	}
 	return out
 }
@@ -241,16 +242,17 @@ func sbOutboundAnyTLS(p *model.Proxy) map[string]any {
 
 func sbOutboundHysteria2(p *model.Proxy) map[string]any {
 	out := map[string]any{
-		"type":        "hysteria2",
-		"tag":         p.Name,
-		"server":      p.Server,
-		"server_port": p.Port,
+		"type":   "hysteria2",
+		"tag":    p.Name,
+		"server": p.Server,
 	}
-	// server_ports：优先 ports（逗号/冒号/范围），其次 mport
-	if ports := sbSplitPorts(p.Hysteria2Ports); len(ports) > 0 {
+	// server_ports 存在时不能同时输出 server_port；两者在 sing-box 中互斥。
+	if ports := sbSplitPortRanges(p.Hysteria2Ports); len(ports) > 0 {
 		out["server_ports"] = ports
-	} else if mport := sbSplitPorts(p.Hysteria2Mport); len(mport) > 0 {
+	} else if mport := sbSplitPortRanges(p.Hysteria2Mport); len(mport) > 0 {
 		out["server_ports"] = mport
+	} else {
+		out["server_port"] = p.Port
 	}
 	if p.Hysteria2UpMbps > 0 {
 		out["up_mbps"] = p.Hysteria2UpMbps
@@ -359,11 +361,11 @@ func sbGroupOutbound(g rule.GroupConfig, members []string) map[string]any {
 	switch g.Type {
 	case rule.GroupSelect:
 		return map[string]any{
-			"type":     "selector",
-			"tag":      g.Name,
+			"type":      "selector",
+			"tag":       g.Name,
 			"outbounds": members,
 		}
-	case rule.GroupURLTest, rule.GroupFallback:
+	case rule.GroupURLTest, rule.GroupFallback, rule.GroupLoadBalance:
 		out := map[string]any{
 			"type":      "urltest",
 			"tag":       g.Name,
@@ -383,17 +385,10 @@ func sbGroupOutbound(g rule.GroupConfig, members []string) map[string]any {
 			// sing-box urltest tolerance 单位毫秒：容忍窗口，兼容 fallback 语义
 			out["tolerance"] = g.Tolerance
 		}
-		if g.Type == rule.GroupURLTest && g.Tolerance > 0 {
+		if (g.Type == rule.GroupURLTest || g.Type == rule.GroupLoadBalance) && g.Tolerance > 0 {
 			out["tolerance"] = g.Tolerance
 		}
 		return out
-	case rule.GroupLoadBalance:
-		// sing-box 1.10 无专门 loadbalance，退化为 selector（顺序保留节点列表即可）
-		return map[string]any{
-			"type":     "selector",
-			"tag":      g.Name,
-			"outbounds": members,
-		}
 	}
 	return nil
 }
@@ -516,6 +511,10 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 
 	// 完整配置：生成组出站、规则、final
 	var groupOutbounds []json.RawMessage
+	nodeTags := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		nodeTags[node.Name] = true
+	}
 	var groupNames map[string]bool
 	groupMembers := make(map[string][]string)
 	if cfg.ACL != nil && len(cfg.ACL.Groups) > 0 {
@@ -560,8 +559,8 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 	}
 	proxySelectorItems = append(proxySelectorItems, "direct")
 	proxySelector := map[string]any{
-		"type":     "selector",
-		"tag":      "proxy",
+		"type":      "selector",
+		"tag":       "proxy",
 		"outbounds": proxySelectorItems,
 	}
 	proxySelBytes, err := json.Marshal(proxySelector)
@@ -592,14 +591,12 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 			case "direct", "block":
 				// keep as is
 			default:
-				if groupNames != nil && groupNames[r.Outbound] {
+				if (groupNames != nil && groupNames[r.Outbound]) || nodeTags[r.Outbound] {
 					// 保持原样
-				} else if r.Outbound == defaultPolicy {
-					r.Outbound = "proxy"
-				} else if r.Outbound == "" {
+				} else {
+					// ACL 可引用不存在的策略组或手写节点；只能指向已生成的 outbound。
 					r.Outbound = "proxy"
 				}
-				// 其它未知目标（如手写节点名）：为了稳妥，直接归到 proxy 选择器
 			}
 			sbRules = append(sbRules, r)
 		}
@@ -614,7 +611,7 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 		final = "block"
 	default:
 		// 自定义组名：sing-box final 必须是一个已存在 outbound tag，优先组名
-		if groupNames == nil || !groupNames[final] {
+		if (groupNames == nil || !groupNames[final]) && !nodeTags[final] {
 			final = "proxy"
 		}
 	}

@@ -26,16 +26,16 @@ type Config struct {
 
 	// /sub 参数映射的渲染开关（见 C++ interfaces.cpp 参数解析）。
 	// 三态字段 nil = 未设置 = 不强制覆盖 = 沿用节点自身声明。
-	AddEmoji     *bool  // nil/false=不加；true=按默认 emoji 规则表追加国旗表情（先去旧再加新）
-	RemoveEmoji  *bool  // true 先删除原始节点名中已有的 emoji
-	UDP          *bool  // 全局 udp 覆盖（nil 不覆盖）
-	TCPFastOpen  *bool  // 全局 tfo 覆盖
-	SkipCertVerify *bool // 全局 scv 覆盖
-	Sort         bool   // true: 节点按名字典序升序排列
-	FilterDeprecated bool // true: 过滤废弃节点（目前仅 SS chacha20）
-	NodeList     bool   // true: nodelist 模式，只输出节点段
-	RenameRule   []RenameRule // 自定义重命名：按正则匹配替换（来自 &new_name= 或外配置）
-	FolderPrefix string // 所有节点名前缀："{folder} - {原Name}"
+	AddEmoji         *bool        // nil/false=不加；true=按默认 emoji 规则表追加国旗表情（先去旧再加新）
+	RemoveEmoji      *bool        // true 先删除原始节点名中已有的 emoji
+	UDP              *bool        // 全局 udp 覆盖（nil 不覆盖）
+	TCPFastOpen      *bool        // 全局 tfo 覆盖
+	SkipCertVerify   *bool        // 全局 scv 覆盖
+	Sort             bool         // true: 节点按名字典序升序排列
+	FilterDeprecated bool         // true: 过滤废弃节点（目前仅 SS chacha20）
+	NodeList         bool         // true: nodelist 模式，只输出节点段
+	RenameRule       []RenameRule // 自定义重命名：按正则匹配替换（来自 &rename= 或外配置）
+	FolderPrefix     string       // 所有节点名前缀："{folder} - {原Name}"
 }
 
 // RenameRule 自定义重命名规则（对应 C++ RegexMatchConfig replace）。
@@ -256,8 +256,8 @@ func setUDP(m *yaml.Node, udp *bool) {
 
 // setTriBoolTrue 三态布尔：仅当非 nil 且 true 时输出 key: true（skip-cert-verify / fast-open 等语义）。
 func setTriBoolTrue(m *yaml.Node, key string, val *bool) {
-if val != nil && *val {
-	setField(m, key, boolNode(true))
+	if val != nil && *val {
+		setField(m, key, boolNode(true))
 	}
 }
 
