@@ -45,7 +45,7 @@
 - **TUIC 全套**：DisableSNI/ReduceRTT/RequestTimeout/UdpRelayMode/CongestionController/MaxOpenStreams 等，缺了 TUIC 节点连不上
 - **Snell 全套**：SnellVersion/OBFS，Surge 专用
 - **HTTP/SOCKS5**：Username/Password/TLS，基本的代理认证字段
-- **mihomo 新字段**：IpVersion（IP 版本选择 v4/v6/dual）、ECH（加密客户端 Hello，防流量分析）、SMUX（多路复用，提升连接效率）、mTLS（双向证书认证）、VlessEncryption/VLESS XTLS 系列（流量伪装优化）、WebSocket max-early-data（提前发送数据减少延迟）、HTTP Method+多路径、TrojanSS 子加密
+- **Clash.Meta（mihomo）新字段**：IpVersion（IP 版本选择 v4/v6/dual）、ECH（加密客户端 Hello，防流量分析）、SMUX（多路复用，提升连接效率）、mTLS（双向证书认证）、VlessEncryption/VLESS XTLS 系列（流量伪装优化）、WebSocket max-early-data（提前发送数据减少延迟）、HTTP Method+多路径、TrojanSS 子加密
 - **VLESS XTLS**：PacketEncoding/PacketAddr/GlobalPadding/AuthenticatedLength/XUDP，这些是 VLESS 的流量伪装增强，缺了可能被检测到
 
 ### 三态布尔
@@ -58,7 +58,7 @@ C++ 用 tribool（未设置/true/false）区分"没传参数"和"显式关掉"�
 
 | 输出格式 | 做什么用的 | Go 版状态 |
 |---------|-----------|-----------|
-| Clash (mihomo YAML) | Clash/mihomo 客户端配置文件，用户最多 | 已实现 |
+| Clash.Meta (mihomo) YAML | Clash.Meta (mihomo) 客户端配置文件，用户最多 | 已实现 |
 | ClashR | Clash 的 SSR 变种，支持 SSR 协议的 protocol/obfs 字段，已基本没人用 | 不区分 |
 | Loon (conf) | Loon App 配置文件，iOS 用户用 | 已实现 |
 | sing-box (JSON) | sing-box 客户端配置，移动端和旁路由主流，Hysteria2/TUIC 支持最好 | 已实现 |

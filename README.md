@@ -45,7 +45,7 @@ go build -o subconv . && ./subconv          # 默认监听 :25600
 | `list` | 否 | `false` | `true` = 只输出节点列表，不要基础配置、策略组和规则。适合自己手动合并配置的场景 |
 | `new_name` | 否 | `true` | Clash 字段名：`true` 用新名 `sni`，`false` 用旧名 `servername`（老内核兼容） |
 | `sort` | 否 | `false` | `true` 按节点名字母排序 |
-| `depr` | 否 | `false` | `true`（别名 `fdn`）过滤掉已废弃的加密方式（比如 SS 的 `chacha20`，新版 mihomo 不认） |
+| `depr` | 否 | `false` | `true`（别名 `fdn`）过滤掉已废弃的加密方式（比如 SS 的 `chacha20`，新版 Clash.Meta（mihomo）不认） |
 | `proxy` | 否 | 直连 | 拉取订阅时走的代理，填 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080` 这种 |
 | `folder` | 否 | — | 给所有节点名加前缀，比如 `folder=机场A` → 节点名变成 `机场A - 原名` |
 | `rename` | 否 | — | 自定义改名：`旧名@新名`，多组用 `@@` 隔开，比如 `香港@HK@@日本@JP` |
