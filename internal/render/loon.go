@@ -2,14 +2,14 @@
 // 输出结构：[General] 骨架（取自 base/base/loon.conf 最小版）+ [Proxy] 节点行
 // + [Proxy Group] 策略组 + [Rule] 规则（复用 Clash 侧规则装载后 MATCH→FINAL 改写）。
 //
-// 节点行翻译对照 C++ 版 subexport.cpp 的 proxyToLoon：
+// 节点行键名以 Loon 3.x 官方文档（nsloon.app/docs/Node）为准，不沿用 C++ 版的旧键：
 //   - ss:     Name = Shadowsocks,server,port,cipher,"password"
-//   - vmess:  Name = vmess,server,port,method,"uuid",over-tls=...,transport=...
-//   - trojan: Name = trojan,server,port,"password"[,tls-name=...][,skip-cert-verify=...]
-//   - hy2:    Name = hysteria2,server,port,"password"[,obfs=...][,obfs-password=...][,sni=...]
+//   - vmess:  Name = vmess,server,port,method,"uuid",over-tls=...,sni=...,transport=...
+//   - trojan: Name = trojan,server,port,"password"[,sni=...][,skip-cert-verify=...]
+//   - hy2:    Name = hysteria2,server,port,"password"[,salamander-password=...][,sni=...]
 //
-// C++ proxyToLoon 未实现 vless / anytls（两者落入 default: continue，节点被丢弃），
-// 本版按 Loon 3.x 语法补齐（vless 含 REALITY 的 publicKey/shortId 键名）。
+// C++ proxyToLoon 的 tls-name 是已废弃键（Loon 3.x 文档无此键），沿用会导致 SNI
+// 被静默忽略；vless / anytls C++ 未实现，本版按 Loon 3.x 语法补齐。
 package render
 
 import (
@@ -134,7 +134,7 @@ func loonSS(p *model.Proxy) string {
 	return fmt.Sprintf("Shadowsocks,%s,%d,%s,%s", p.Server, p.Port, p.Cipher, quoteLoon(p.Password))
 }
 
-// loonVMess C++: vmess,hostname,port,method,"uuid",over-tls=...,tls-name=...,transport=...
+// loonVMess vmess,hostname,port,method,"uuid",over-tls=...,sni=...,transport=...
 //   - method 为 auto/空 时改写为 chacha20-ietf-poly1305（对齐 C++ 的 auto 改写）
 //   - 传输层支持 tcp / ws（含 path/host），grpc 为本版补齐；
 //     其余（h2/http 等）跳过节点，对齐 C++ 的 default: continue
@@ -146,7 +146,11 @@ func loonVMess(p *model.Proxy) (string, bool) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "vmess,%s,%d,%s,%s,over-tls=%t", p.Server, p.Port, method, quoteLoon(p.UUID), p.TLSSecure)
 	if p.TLSSecure && p.SNI != "" {
-		b.WriteString(",tls-name=" + p.SNI)
+		b.WriteString(",sni=" + p.SNI)
+	}
+	if p.AlterID > 0 {
+		// Loon 默认 alterId=0（AEAD）；非 AEAD 节点不显式输出会握手失败
+		b.WriteString(",alterId=" + strconv.Itoa(p.AlterID))
 	}
 	switch p.Network {
 	case "tcp", "":
@@ -176,12 +180,12 @@ func loonAppendTFO(b *strings.Builder, p *model.Proxy) {
 	}
 }
 
-// loonTrojan C++: trojan,hostname,port,"password"[,tls-name=...][,skip-cert-verify=...]
+// loonTrojan trojan,hostname,port,"password"[,sni=...][,skip-cert-verify=...]
 func loonTrojan(p *model.Proxy) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "trojan,%s,%d,%s", p.Server, p.Port, quoteLoon(p.Password))
 	if p.SNI != "" {
-		b.WriteString(",tls-name=" + p.SNI)
+		b.WriteString(",sni=" + p.SNI)
 	}
 	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
@@ -190,16 +194,14 @@ func loonTrojan(p *model.Proxy) string {
 	return b.String()
 }
 
-// loonHysteria2 C++ 基础上追加 obfs/obfs-password（Loon 3.x 支持 salamander 混淆）：
-// hysteria2,hostname,port,"password"[,obfs=...][,obfs-password=...][,sni=...][,skip-cert-verify=true]
+// loonHysteria2 Loon 3.x 的 salamander 混淆只有一个键 salamander-password
+// （文档无 obfs=/obfs-password= 键，Loon 混淆类型固定为 salamander）：
+// hysteria2,hostname,port,"password"[,salamander-password=...][,sni=...][,skip-cert-verify=true]
 func loonHysteria2(p *model.Proxy) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "hysteria2,%s,%d,%s", p.Server, p.Port, quoteLoon(p.Password))
-	if p.Hysteria2Obfs != "" {
-		b.WriteString(",obfs=" + p.Hysteria2Obfs)
-		if p.Hysteria2ObfsPassword != "" {
-			b.WriteString(",obfs-password=" + p.Hysteria2ObfsPassword)
-		}
+	if p.Hysteria2ObfsPassword != "" {
+		b.WriteString(",salamander-password=" + p.Hysteria2ObfsPassword)
 	}
 	if p.SNI != "" {
 		b.WriteString(",sni=" + p.SNI)
@@ -213,13 +215,13 @@ func loonHysteria2(p *model.Proxy) string {
 
 // loonVLESS Loon 3.x 语法（C++ proxyToLoon 未实现，本版补齐）：
 //
-//	vless,server,port,uuid,tls=true,sni=...,flow=...,transport=tcp|ws|grpc
-//	  ws:  追加 ws-path=...、ws-headers=Host:...
+//	vless,server,port,uuid,over-tls=true,sni=...,flow=...,transport=tcp|ws|grpc
+//	  ws:  追加 path=...、host=...（与 vmess ws 同键名，ws-path/ws-headers 是 Surge 键）
 //	  grpc: 追加 grpc-service-name=...
-//	  REALITY: publicKey=...、shortId=...（Loon 3.x 键名）
+//	  REALITY: public-key=...、short-id=...（Loon 3.x 文档键名，带连字符）
 func loonVLESS(p *model.Proxy) (string, bool) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "vless,%s,%d,%s,tls=%t", p.Server, p.Port, quoteLoon(p.UUID), p.TLSSecure)
+	fmt.Fprintf(&b, "vless,%s,%d,%s,over-tls=%t", p.Server, p.Port, quoteLoon(p.UUID), p.TLSSecure)
 	if p.SNI != "" {
 		b.WriteString(",sni=" + p.SNI)
 	}
@@ -232,10 +234,10 @@ func loonVLESS(p *model.Proxy) (string, bool) {
 	case "ws":
 		b.WriteString(",transport=ws")
 		if p.WSPath != "" {
-			b.WriteString(",ws-path=" + p.WSPath)
+			b.WriteString(",path=" + p.WSPath)
 		}
 		if host := p.WSHeaders["Host"]; host != "" {
-			b.WriteString(",ws-headers=Host:" + host)
+			b.WriteString(",host=" + host)
 		}
 	case "grpc":
 		b.WriteString(",transport=grpc")
@@ -246,9 +248,9 @@ func loonVLESS(p *model.Proxy) (string, bool) {
 		return "", false
 	}
 	if p.PublicKey != "" {
-		b.WriteString(",publicKey=" + p.PublicKey)
+		b.WriteString(",public-key=" + p.PublicKey)
 		if p.ShortID != "" {
-			b.WriteString(",shortId=" + p.ShortID)
+			b.WriteString(",short-id=" + p.ShortID)
 		}
 	}
 	if p.SkipCertVerify != nil && *p.SkipCertVerify {

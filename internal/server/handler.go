@@ -100,7 +100,6 @@ type subParams struct {
 	TFO         *bool  // 全局 tfo 三态覆盖
 	SCV         *bool  // 全局 skip-cert-verify 三态覆盖
 	NodeList    *bool  // list=true：仅输出节点段
-	NewName     *bool  // new_name=true 新字段名 sni / false 旧 servername（Clash 专用）
 	Sort        *bool  // sort=true 按节点名字典序
 	Depr        *bool  // depr/fdn=true 过滤废弃加密
 	Proxy       string // 抓取订阅使用的代理 URL（http:// / socks5://）
@@ -143,7 +142,6 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		TFO:         parseTribool(q, "tfo"),
 		SCV:         parseTriboolMulti(q, "scv", "skip-cert-verify"),
 		NodeList:    parseTribool(q, "list"),
-		NewName:     parseTribool(q, "new_name"),
 		Sort:        parseTribool(q, "sort"),
 		Depr:        parseTriboolMulti(q, "fdn", "depr"),
 	}
@@ -218,7 +216,6 @@ func handleSub(w http.ResponseWriter, r *http.Request) {
 		Sort:             boolValue(params.Sort, false),
 		FilterDeprecated: boolValue(params.Depr, false),
 		NodeList:         boolValue(params.NodeList, false),
-		NewName:          params.NewName,
 	}
 	if params.Emoji != nil && *params.Emoji {
 		renderCfg.AddEmoji = model.BoolPtr(true)

@@ -60,6 +60,14 @@ func TestRenderClashRealitySample(t *testing.T) {
 		if p["tls"] != true {
 			t.Errorf("节点 %d tls = %v, want true", i, p["tls"])
 		}
+		// 关键回归：mihomo 的 vless 只认 servername，输出 sni 会导致
+		// SNI 被静默忽略、REALITY 认证失败（2026-09 排查过的线上事故）
+		if p["servername"] != "www.microsoft.com" {
+			t.Errorf("节点 %d servername = %v, want www.microsoft.com", i, p["servername"])
+		}
+		if _, exists := p["sni"]; exists {
+			t.Errorf("节点 %d 不应输出 sni 字段（vless 在 mihomo 中只认 servername）", i)
+		}
 		ro, ok := p["reality-opts"].(map[string]any)
 		if !ok {
 			t.Errorf("节点 %d 缺少 reality-opts", i)
@@ -185,8 +193,12 @@ func TestRenderClashProtocols(t *testing.T) {
 	if vm["uuid"] != "u1" || vm["cipher"] != "auto" || vm["alterId"] != 0 {
 		t.Errorf("vmess 字段错误: %v", vm)
 	}
-	if vm["tls"] != true || vm["sni"] != "cdn.example.com" {
+	if vm["tls"] != true || vm["servername"] != "cdn.example.com" {
 		t.Errorf("vmess TLS 字段错误: %v", vm)
+	}
+	// mihomo 的 vless/vmess 只认 servername；输出 sni 属于字段名错误（会被静默忽略）
+	if _, exists := vm["sni"]; exists {
+		t.Errorf("vmess 不应输出 sni 字段: %v", vm)
 	}
 	if vm["network"] != "ws" {
 		t.Errorf("vmess network = %v, want ws", vm["network"])

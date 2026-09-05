@@ -31,7 +31,6 @@ type Config struct {
 	UDP          *bool  // 全局 udp 覆盖（nil 不覆盖）
 	TCPFastOpen  *bool  // 全局 tfo 覆盖
 	SkipCertVerify *bool // 全局 scv 覆盖
-	NewName      *bool  // true: clash 使用新版字段名（sni/...）；false: 兼容旧版（servername/...）
 	Sort         bool   // true: 节点按名字典序升序排列
 	FilterDeprecated bool // true: 过滤废弃节点（目前仅 SS chacha20）
 	NodeList     bool   // true: nodelist 模式，只输出节点段
@@ -262,15 +261,6 @@ if val != nil && *val {
 	}
 }
 
-// clashSNIField 按 cfg.NewName 返回 Clash.Meta（mihomo）sni 字段名：
-// nil/true → "sni"（新字段），false → "servername"（旧字段兼容老内核）。
-func clashSNIField(cfg *Config) string {
-	if cfg != nil && cfg.NewName != nil && !*cfg.NewName {
-		return "servername"
-	}
-	return "sni"
-}
-
 // setALPN 非空 ALPN 序列字段。
 func setALPN(m *yaml.Node, alpn []string) {
 	if len(alpn) == 0 {
@@ -316,7 +306,9 @@ func renderVLESS(p *model.Proxy, cfg *Config) *yaml.Node {
 	setStr(m, "uuid", p.UUID)
 	setStr(m, "flow", p.Flow)
 	setBoolTrue(m, "tls", p.TLSSecure)
-	setStr(m, clashSNIField(cfg), p.SNI)
+	// mihomo 的 vless/vmess 只认 servername；sni 是 trojan/hysteria2/anytls 的字段。
+	// 写 sni 不报错但被静默忽略，SNI 落到节点域名上，REALITY 节点会认证失败回落
+	setStr(m, "servername", p.SNI)
 	setTransport(m, p)
 	// REALITY：public-key 为空则整个 reality-opts 不输出；
 	// short-id 一律双引号（裸 29845e28 会被下游解析为浮点数），为空时只输出 public-key
@@ -356,7 +348,7 @@ func renderVMess(p *model.Proxy, cfg *Config) *yaml.Node {
 	setField(m, "alterId", intNode(p.AlterID))
 	setStr(m, "cipher", p.Security)
 	setBoolTrue(m, "tls", p.TLSSecure)
-	setStr(m, clashSNIField(cfg), p.SNI)
+	setStr(m, "servername", p.SNI)
 	setTransport(m, p)
 	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)

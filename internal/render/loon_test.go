@@ -61,8 +61,9 @@ func loonProtocolNodes() []model.Proxy {
 	}
 }
 
-// TestRenderLoonProtocols 六协议逐行断言（含 REALITY publicKey/shortId 键名、
-// 29845e28 原值不丢、vmess auto→chacha20-ietf-poly1305）。
+// TestRenderLoonProtocols 六协议逐行断言（键名以 Loon 3.x 官方文档为准：
+// sni=/over-tls=/public-key=/short-id=/salamander-password=，含 29845e28 原值不丢、
+// vmess auto→chacha20-ietf-poly1305）。
 func TestRenderLoonProtocols(t *testing.T) {
 	out, err := RenderLoon(loonProtocolNodes(), &Config{})
 	if err != nil {
@@ -70,16 +71,16 @@ func TestRenderLoonProtocols(t *testing.T) {
 	}
 
 	wantLines := []string{
-		// vless REALITY：uuid 引号、tls/sni/flow/transport 顺序、publicKey/shortId 键名
-		`香港01 = vless,1.2.3.4,443,"11111111-2222-3333-4444-555555555555",tls=true,sni=www.microsoft.com,flow=xtls-rprx-vision,transport=tcp,publicKey=PbKey123,shortId=29845e28`,
+		// vless REALITY：uuid 引号、over-tls/sni/flow/transport 顺序、public-key/short-id 键名
+		`香港01 = vless,1.2.3.4,443,"11111111-2222-3333-4444-555555555555",over-tls=true,sni=www.microsoft.com,flow=xtls-rprx-vision,transport=tcp,public-key=PbKey123,short-id=29845e28`,
 		// vmess：auto 改写为 chacha20-ietf-poly1305（对齐 C++），ws 传输带 path/host
-		`vm节点 = vmess,1.1.1.1,443,chacha20-ietf-poly1305,"u1",over-tls=true,tls-name=cdn.example.com,transport=ws,path=/ws,host=cdn.example.com`,
+		`vm节点 = vmess,1.1.1.1,443,chacha20-ietf-poly1305,"u1",over-tls=true,sni=cdn.example.com,transport=ws,path=/ws,host=cdn.example.com`,
 		// ss：密码加引号
 		`ss节点 = Shadowsocks,2.2.2.2,8388,aes-128-gcm,"123456"`,
-		// trojan：tls-name + skip-cert-verify
-		`tj节点 = trojan,3.3.3.3,443,"tjpass",tls-name=tj.example.com,skip-cert-verify=true`,
-		// hysteria2：obfs/obfs-password/sni
-		`hy2节点 = hysteria2,4.4.4.4,443,"hy2pass",obfs=salamander,obfs-password=654321,sni=hy2.example.com`,
+		// trojan：sni + skip-cert-verify
+		`tj节点 = trojan,3.3.3.3,443,"tjpass",sni=tj.example.com,skip-cert-verify=true`,
+		// hysteria2：salamander-password + sni
+		`hy2节点 = hysteria2,4.4.4.4,443,"hy2pass",salamander-password=654321,sni=hy2.example.com`,
 		// anytls：密码引号 + sni
 		`at节点 = anytls,5.5.5.5,8443,"atpass",sni=at.example.com`,
 	}
@@ -89,20 +90,51 @@ func TestRenderLoonProtocols(t *testing.T) {
 		}
 	}
 
+	// 已废弃/不存在的键不允许出现（tls-name、tls=、obfs=、publicKey、ws-path）
+	for _, bad := range []string{"tls-name=", "obfs=", "publicKey=", "shortId=", ",tls=true", ",tls=false", "ws-path=", "ws-headers="} {
+		if strings.Contains(out, bad) {
+			t.Errorf("输出不应包含废弃/错误键 %q:\n%s", bad, out)
+		}
+	}
+
 	if proxies := loonSectionLines(t, out, "Proxy"); len(proxies) != 6 {
 		t.Errorf("[Proxy] 行数 = %d, want 6: %v", len(proxies), proxies)
 	}
 
 	// 29845e28 原值保留（Loon 为纯文本，无 YAML 类型歧义，不加引号）
-	if !strings.Contains(out, "shortId=29845e28") {
-		t.Errorf("shortId 应原值输出 29845e28")
+	if !strings.Contains(out, "short-id=29845e28") {
+		t.Errorf("short-id 应原值输出 29845e28")
 	}
-	if strings.Contains(out, "shortId=\"29845e28\"") {
-		t.Errorf("shortId 不应加引号")
+	if strings.Contains(out, "short-id=\"29845e28\"") {
+		t.Errorf("short-id 不应加引号")
 	}
 }
 
-// TestRenderLoonVLESSTransports vless ws/grpc 传输的键名。
+// TestRenderLoonVMessAlterID 非 AEAD 节点（alterId>0）必须显式输出 alterId。
+func TestRenderLoonVMessAlterID(t *testing.T) {
+	nodes := []model.Proxy{
+		{Type: model.TypeVMess, Name: "aead", Server: "1.1.1.1", Port: 443, UUID: "u", Network: "tcp"},
+		{Type: model.TypeVMess, Name: "legacy", Server: "2.2.2.2", Port: 443, UUID: "u", AlterID: 64, Network: "tcp"},
+	}
+	out, err := RenderLoon(nodes, &Config{})
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+	for _, ln := range loonSectionLines(t, out, "Proxy") {
+		switch {
+		case strings.HasPrefix(ln, "aead = vmess,"):
+			if strings.Contains(ln, "alterId") {
+				t.Errorf("AEAD 节点不应输出 alterId: %q", ln)
+			}
+		case strings.HasPrefix(ln, "legacy = vmess,"):
+			if !strings.Contains(ln, ",alterId=64") {
+				t.Errorf("非 AEAD 节点应输出 alterId=64: %q", ln)
+			}
+		}
+	}
+}
+
+// TestRenderLoonVLESSTransports vless ws/grpc 传输的键名（path/host，与 vmess ws 一致）。
 func TestRenderLoonVLESSTransports(t *testing.T) {
 	nodes := []model.Proxy{
 		{
@@ -119,10 +151,10 @@ func TestRenderLoonVLESSTransports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}
-	if !strings.Contains(out, `ws节点 = vless,1.1.1.1,443,"u",tls=true,transport=ws,ws-path=/path,ws-headers=Host:ws.example.com`) {
+	if !strings.Contains(out, `ws节点 = vless,1.1.1.1,443,"u",over-tls=true,transport=ws,path=/path,host=ws.example.com`) {
 		t.Errorf("vless ws 传输字段错误:\n%s", out)
 	}
-	if !strings.Contains(out, `grpc节点 = vless,2.2.2.2,443,"u",tls=true,transport=grpc,grpc-service-name=grpcSvc`) {
+	if !strings.Contains(out, `grpc节点 = vless,2.2.2.2,443,"u",over-tls=true,transport=grpc,grpc-service-name=grpcSvc`) {
 		t.Errorf("vless grpc 传输字段错误:\n%s", out)
 	}
 }
@@ -208,8 +240,8 @@ func TestRenderLoonEndToEndMini(t *testing.T) {
 	if !strings.HasPrefix(proxies[0], "节点01 = vless,1.2.3.1,443,") {
 		t.Errorf("首行节点应为 vless: %q", proxies[0])
 	}
-	if !strings.Contains(proxies[18], "shortId=29845e28") {
-		t.Errorf("节点19 应保留 shortId=29845e28: %q", proxies[18])
+	if !strings.Contains(proxies[18], "short-id=29845e28") {
+		t.Errorf("节点19 应保留 short-id=29845e28: %q", proxies[18])
 	}
 
 	groups := loonSectionLines(t, out, "Proxy Group")

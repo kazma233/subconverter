@@ -193,11 +193,11 @@ func TestSubLoonTarget(t *testing.T) {
 			t.Errorf("Loon 输出缺少段头 %s:\n%s", section, body)
 		}
 	}
-	// vless REALITY 节点行（shortId 原值）与 trojan 节点行
-	if !strings.Contains(body, `香港01 = vless,1.2.3.4,443,"11111111-2222-3333-4444-555555555555",tls=true,sni=www.microsoft.com,flow=xtls-rprx-vision,transport=tcp,publicKey=PbKey123,shortId=29845e28`) {
+	// vless REALITY 节点行（short-id 原值）与 trojan 节点行（Loon 3.x 键名）
+	if !strings.Contains(body, `香港01 = vless,1.2.3.4,443,"11111111-2222-3333-4444-555555555555",over-tls=true,sni=www.microsoft.com,flow=xtls-rprx-vision,transport=tcp,public-key=PbKey123,short-id=29845e28`) {
 		t.Errorf("vless REALITY 节点行错误:\n%s", body)
 	}
-	if !strings.Contains(body, `日本01 = trojan,5.6.7.8,443,"pw123",tls-name=a.example.com`) {
+	if !strings.Contains(body, `日本01 = trojan,5.6.7.8,443,"pw123",sni=a.example.com`) {
 		t.Errorf("trojan 节点行错误:\n%s", body)
 	}
 	// Loon 规则用 FINAL 而非 MATCH
