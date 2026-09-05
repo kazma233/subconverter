@@ -2,7 +2,7 @@ package model
 
 import "testing"
 
-// TestProxyTypeString 验证协议类型可读名称与 Clash/mihomo type 字段一致。
+// TestProxyTypeString 验证协议类型可读名称与 Clash.Meta（mihomo）type 字段一致。
 func TestProxyTypeString(t *testing.T) {
 	cases := map[ProxyType]string{
 		TypeVLESS:     "vless",

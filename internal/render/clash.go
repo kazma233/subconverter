@@ -1,4 +1,4 @@
-// Package render 实现输出侧渲染。本期（Phase 2）完成 Clash（mihomo）YAML：
+// Package render 实现输出侧渲染。本期（Phase 2）完成 Clash.Meta（mihomo）YAML：
 // 节点段各协议一 map、REALITY 字段强制双引号、策略组与规则由 ACL 配置驱动。
 //
 // 渲染统一基于 yaml.Node 手工建树（而非 struct marshal），原因：
@@ -73,7 +73,7 @@ log-level: info
 external-controller: 127.0.0.1:9090
 `
 
-// RenderClash 渲染完整 Clash（mihomo）配置：
+// RenderClash 渲染完整 Clash.Meta（mihomo）配置：
 // 基础模板 + proxies + proxy-groups（ACL 策略组）+ rules（ACL 规则集，尾部必有 MATCH）。
 func RenderClash(nodes []model.Proxy, cfg *Config) (string, error) {
 	if cfg == nil {
@@ -262,7 +262,7 @@ if val != nil && *val {
 	}
 }
 
-// clashSNIField 按 cfg.NewName 返回 mihomo sni 字段名：
+// clashSNIField 按 cfg.NewName 返回 Clash.Meta（mihomo）sni 字段名：
 // nil/true → "sni"（新字段），false → "servername"（旧字段兼容老内核）。
 func clashSNIField(cfg *Config) string {
 	if cfg != nil && cfg.NewName != nil && !*cfg.NewName {
@@ -396,7 +396,7 @@ func renderTrojan(p *model.Proxy, cfg *Config) *yaml.Node {
 	return m
 }
 
-// renderHysteria2 渲染 hysteria2 节点（字段对齐 mihomo：password/obfs/obfs-password/sni/alpn/skip-cert-verify/ports）。
+// renderHysteria2 渲染 hysteria2 节点，字段对齐 Clash.Meta（mihomo）：password/obfs/obfs-password/sni/alpn/skip-cert-verify/ports。
 func renderHysteria2(p *model.Proxy, cfg *Config) *yaml.Node {
 	m := mapNode()
 	setStr(m, "name", p.Name)
@@ -522,7 +522,7 @@ func setTransport(m *yaml.Node, p *model.Proxy) {
 
 // sanitizeNodeNames 节点名清洗（原地）：
 //   - '=' 替换为 '-'（Surge 等客户端对备注中的 '=' 解析异常，对齐 C++ processRemark）
-//   - 重名追加 " 2"/" 3" 后缀去重（mihomo 拒绝加载重名节点）
+//   - 重名追加 " 2"/" 3" 后缀去重：Clash.Meta（mihomo）拒绝加载重名节点
 func sanitizeNodeNames(nodes []model.Proxy) {
 	seen := make(map[string]int, len(nodes))
 	for i := range nodes {

@@ -84,7 +84,7 @@ func ApplySubOverrides(nodes []model.Proxy, cfg *Config) []model.Proxy {
 		}
 	}
 
-	// 5) 过滤废弃节点：仅 SS 的 chacha20（mihomo 已移除）
+	// 5) 过滤废弃节点：仅 SS 的 chacha20，Clash.Meta（mihomo）已移除
 	if cfg.FilterDeprecated {
 		out := nodes[:0]
 		for _, n := range nodes {

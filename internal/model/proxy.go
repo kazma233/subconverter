@@ -17,7 +17,7 @@ const (
 	TypeAnyTLS              // anytls
 )
 
-// String 返回协议类型的可读名称，与 Clash/mihomo 节点 type 字段取值一致。
+// String 返回协议类型的可读名称，与 Clash.Meta（mihomo）节点 type 字段取值一致。
 func (t ProxyType) String() string {
 	switch t {
 	case TypeVLESS:

@@ -203,7 +203,7 @@ func clashMapToProxy(m map[string]any) *model.Proxy {
 		if ro := clashSubMap(m, "reality-opts"); ro != nil {
 			node.PublicKey = clashStr(ro, "public-key")
 			node.ShortID = clashStr(ro, "short-id")
-			// 配了 REALITY 即视为 TLS（mihomo 语义上 REALITY 必须开 TLS）
+			// 配了 REALITY 即视为 TLS：Clash.Meta（mihomo）语义上 REALITY 必须开 TLS
 			node.TLSSecure = true
 		}
 		applyTransport(node, m)
