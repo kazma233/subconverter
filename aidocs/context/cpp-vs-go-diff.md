@@ -1,6 +1,6 @@
 # Go 版与 C++ 版完整差异对照
 
-> 基准：C++ 版 `archive/src/` 全量功能 vs Go 版当前实现（2026-09-03）
+> 基准：C++ 版 `archive/src/` 全量功能 vs Go 版当前实现（2026-09-18 更新）
 
 ## 一、输入侧（协议解析）
 
@@ -8,14 +8,14 @@
 
 | 协议 | 做什么用的 | Go 版状态 |
 |------|-----------|-----------|
-| Shadowsocks (SS) | 最老牌的代理协议，机场最常见，加密流量 | 已实现 |
+| Shadowsocks (SS) | 最老牌的代理协议，机场最常见，加密流量 | 已实现（含 SS2022 `2022-blake3-*` 原样透传，2026-09-18 端到端验证） |
 | ShadowsocksR (SSR) | SS 的衍生版，带混淆和协议插件，国内老机场仍有存量 | 缺失 |
 | VMess | V2Ray 系主力协议，UUID + 加密，机场常见 | 已实现 |
 | VLESS (含 REALITY) | VMess 的精简版，REALITY 可以伪装成访问真实网站，目前最主流 | 已实现 |
 | Trojan | 把代理流量伪装成正常 HTTPS 流量，机场常用 | 已实现 |
 | Hysteria2 | 基于 QUIC 的高速协议，支持端口跳跃和混淆，鸡场新主流 | 已实现 |
 | AnyTLS | 新协议，把代理流量伪装成正常 TLS 双向认证 | 已实现 |
-| Snell | Surge 私有协议，类似 Trojan 但 Surge 专用，只有 Surge 用户用 | 缺失 |
+| Snell | Surge 私有协议，类似 Trojan 但 Surge 专用，只有 Surge 用户用 | 已实现（2026-09-18）：snell:// URI（社区约定格式，C++ 无先例）+ Clash YAML 输入；三端输出 |
 | HTTP/HTTPS | 透明 HTTP 代理，不需要加密，适合做中转链路或测试 | 缺失 |
 | SOCKS5 | 经典代理协议，支持 UDP，部分机场用它做转发 | 缺失 |
 | WireGuard | 轻量 VPN 协议，速度极快，部分机场用它提供整机代理 | 缺失 |
@@ -43,7 +43,7 @@
 - **WireGuard 全套**：SelfIP/SelfIPv6（本机地址）、PrivateKey/PublicKey（密钥对）、PreSharedKey（预共享密钥）、DnsServers/Mtu/AllowedIPs 等，缺了无法用 WireGuard 节点
 - **Hysteria v1**：Ports（端口跳跃）、UpSpeed/DownSpeed（限速）、AuthStr/QUICSecure/QUICSecret（认证和加密），v1 已过时可不做
 - **TUIC 全套**：DisableSNI/ReduceRTT/RequestTimeout/UdpRelayMode/CongestionController/MaxOpenStreams 等，缺了 TUIC 节点连不上
-- **Snell 全套**：SnellVersion/OBFS，Surge 专用
+- **Snell 全套**：SnellVersion/OBFS —— 已补齐（SnellVersion/SnellObfs/SnellObfsHost）。注意：C++ 版无 snell:// URI 解析、sing-box/Loon 端无实现（跳过）；Go 版三端均输出，其中 sing-box 需 1.14+ 且仅支持 version 4/6，其余版本在渲染入口剔除并记日志
 - **HTTP/SOCKS5**：Username/Password/TLS，基本的代理认证字段
 - **Clash.Meta（mihomo）新字段**：IpVersion（IP 版本选择 v4/v6/dual）、ECH（加密客户端 Hello，防流量分析）、SMUX（多路复用，提升连接效率）、mTLS（双向证书认证）、VlessEncryption/VLESS XTLS 系列（流量伪装优化）、WebSocket max-early-data（提前发送数据减少延迟）、HTTP Method+多路径、TrojanSS 子加密
 - **VLESS XTLS**：PacketEncoding/PacketAddr/GlobalPadding/AuthenticatedLength/XUDP，这些是 VLESS 的流量伪装增强，缺了可能被检测到

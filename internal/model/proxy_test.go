@@ -11,6 +11,7 @@ func TestProxyTypeString(t *testing.T) {
 		TypeTrojan:    "trojan",
 		TypeHysteria2: "hysteria2",
 		TypeAnyTLS:    "anytls",
+		TypeSnell:     "snell",
 		TypeUnknown:   "unknown",
 	}
 	for typ, want := range cases {

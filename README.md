@@ -3,7 +3,7 @@
 把机场订阅链接转换成 Clash、Loon、sing-box 客户端能用的配置文件。
 **Go 实现**（原 C++ 版代码归档于 `archive/`，仅作参考不再构建）。
 
-支持 vless/REALITY、anytls、ss、trojan、hysteria2、vmess 协议，
+支持 vless/REALITY、anytls、ss、trojan、hysteria2、vmess、snell 协议，
 规则和策略组从 ACL4SSR 等仓库运行时拉取并缓存，镜像本身不含规则文件。
 
 ## 快速开始（本地部署三行命令）
@@ -90,10 +90,11 @@ Clash 的 TLS SNI 字段由协议决定：vless/vmess 固定输出 mihomo 所需
 | --------- | ------------------------------------------------------- | ------------------------ |
 | vless     | `vless://uuid@host:port?...`（含 REALITY：pbk/sid/fp/flow） | short-id 不做校验直接传，能不能用由客户端判断 |
 | vmess     | `vmess://` base64 JSON                                  | 新旧字段变体兼容                 |
-| ss        | `ss://`                                                 | 明文与 base64 用户信息均可        |
+| ss        | `ss://`                                                 | 明文与 base64 用户信息均可；SS2022（`2022-blake3-*`）加密与密钥原样透传 |
 | trojan    | `trojan://`                                             | <br />                   |
 | hysteria2 | `hysteria2://` / `hy2://`                               | 支持 salamander 混淆和端口跳跃       |
 | anytls    | `anytls://`                                             | <br />                   |
+| snell     | `snell://psk@host:port?version=&obfs=&obfs-host=`       | Surge 私有协议；sing-box 端仅支持 version 4/6，其余版本跳过 |
 
 订阅内容支持：base64 列表、明文逐行链接、Clash YAML（含 `Proxy`/`proxies` 两种键名）。
 
@@ -118,6 +119,7 @@ Go 的正则引擎是 **RE2**，和 C++ 版用的 PCRE2 有点不一样：
 | short-id 校验 | 渲染期清洗（奇数补零/非法丢弃）           | 不校验，原样透传（双引号防歧义）                         |
 | 正则引擎        | PCRE2                        | RE2（见上文限制）                              |
 | Loon vless/anytls | 没实现（节点被丢弃）                 | 按 Loon 3.x 语法补齐了（含 REALITY）               |
+| Snell        | 支持 Clash/Surge 输出，无 snell:// URI 解析 | 三端输出（clash/loon/singbox）；snell:// URI 按社区约定格式解析（C++ 无先例）；sing-box 需 1.14+ 且仅 version 4/6 |
 | 订阅拉取        | libcurl（全局 UA、缓存 TTL、代理规则）   | net/http（默认 UA clash.meta、30s 超时、单次重试、gzip 解压、流量信息头回传） |
 | 部署          | 静态依赖链重，交叉编译复杂               | 单二进制，多阶段 Docker 构建                       |
 | 本地生成/档案     | `-g`、profile、gist 上传等       | 不支持                                        |

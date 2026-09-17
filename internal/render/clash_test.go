@@ -245,6 +245,60 @@ func TestRenderClashProtocols(t *testing.T) {
 	}
 }
 
+// TestRenderClashSnell snell 节点：psk 数值化引号、version、obfs-opts、udp。
+func TestRenderClashSnell(t *testing.T) {
+	udpTrue := true
+	nodes := []model.Proxy{
+		{
+			Type: model.TypeSnell, Name: "snell节点", Server: "8.8.4.4", Port: 6160,
+			Password: "123456", SnellVersion: 4, SnellObfs: "http", SnellObfsHost: "bing.com",
+			UDP: &udpTrue,
+		},
+		{
+			Type: model.TypeSnell, Name: "snell无版本", Server: "8.8.8.8", Port: 6160,
+			Password: "pskpass",
+		},
+	}
+	out, err := RenderClash(nodes, &Config{})
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+	var doc clashDoc
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("输出不是合法 YAML: %v\n%s", err, out)
+	}
+	if len(doc.Proxies) != 2 {
+		t.Fatalf("proxies 数 = %d, want 2", len(doc.Proxies))
+	}
+
+	sn := doc.Proxies[0]
+	if sn["type"] != "snell" {
+		t.Errorf("snell type = %v", sn["type"])
+	}
+	// 纯数字 psk 必须反序列化为 string（双引号强制）
+	if psk, ok := sn["psk"].(string); !ok || psk != "123456" {
+		t.Errorf("snell 纯数字 psk 应为 string \"123456\", got %T %v", sn["psk"], sn["psk"])
+	}
+	if sn["version"] != 4 {
+		t.Errorf("snell version = %v, want 4", sn["version"])
+	}
+	oo := sn["obfs-opts"].(map[string]any)
+	if oo["mode"] != "http" || oo["host"] != "bing.com" {
+		t.Errorf("snell obfs-opts = %v", oo)
+	}
+	if sn["udp"] != true {
+		t.Errorf("snell udp = %v, want true", sn["udp"])
+	}
+
+	sn2 := doc.Proxies[1]
+	if _, exists := sn2["version"]; exists {
+		t.Errorf("未指定 version 不应输出: %v", sn2)
+	}
+	if _, exists := sn2["obfs-opts"]; exists {
+		t.Errorf("无混淆不应输出 obfs-opts: %v", sn2)
+	}
+}
+
 // TestRenderClashUDPUnset udp 未设置（nil）时不输出该字段。
 func TestRenderClashUDPUnset(t *testing.T) {
 	nodes := []model.Proxy{

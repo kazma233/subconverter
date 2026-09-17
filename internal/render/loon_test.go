@@ -110,6 +110,37 @@ func TestRenderLoonProtocols(t *testing.T) {
 	}
 }
 
+// TestRenderLoonSnell snell 节点行（Loon/Surge 风格键名 psk/version/obfs/obfs-host）。
+func TestRenderLoonSnell(t *testing.T) {
+	nodes := []model.Proxy{
+		{
+			Type: model.TypeSnell, Name: "snell节点", Server: "8.8.4.4", Port: 6160,
+			Password: "pskpass", SnellVersion: 4, SnellObfs: "http", SnellObfsHost: "bing.com",
+			TCPFastOpen: model.BoolPtr(true),
+		},
+		{
+			Type: model.TypeSnell, Name: "snell无混淆", Server: "8.8.8.8", Port: 6160,
+			Password: "pskpass", SnellObfs: "off",
+		},
+	}
+	out, err := RenderLoon(nodes, &Config{})
+	if err != nil {
+		t.Fatalf("渲染失败: %v", err)
+	}
+	want := `snell节点 = snell,8.8.4.4,6160,psk=pskpass,version=4,obfs=http,obfs-host=bing.com,fast-open=true`
+	if !strings.Contains(out, want) {
+		t.Errorf("输出缺少节点行:\n%q\n实际输出:\n%s", want, out)
+	}
+	// obfs=off 等于无混淆，不输出 obfs/obfs-host；未指定 version 不输出 version
+	want2 := `snell无混淆 = snell,8.8.8.8,6160,psk=pskpass`
+	if !strings.Contains(out, want2) {
+		t.Errorf("输出缺少节点行:\n%q\n实际输出:\n%s", want2, out)
+	}
+	if strings.Contains(out, "obfs=off") {
+		t.Errorf("obfs=off 不应输出:\n%s", out)
+	}
+}
+
 // TestRenderLoonVMessAlterID 非 AEAD 节点（alterId>0）必须显式输出 alterId。
 func TestRenderLoonVMessAlterID(t *testing.T) {
 	nodes := []model.Proxy{

@@ -241,6 +241,18 @@ func clashMapToProxy(m map[string]any) *model.Proxy {
 		node.Password = clashStr(m, "password")
 		node.SNI = sni
 		node.TLSSecure = true
+	case "snell":
+		// 对齐 C++ explodeClash case "snell"：psk / obfs-opts.{mode,host} / version
+		node.Type = model.TypeSnell
+		node.Password = clashStr(m, "psk")
+		if node.Password == "" {
+			return nil
+		}
+		if oo := clashSubMap(m, "obfs-opts"); oo != nil {
+			node.SnellObfs = clashStr(oo, "mode")
+			node.SnellObfsHost = clashStr(oo, "host")
+		}
+		node.SnellVersion, _ = clashInt(m, "version")
 	default:
 		// 不认识的 type：跳过该节点
 		return nil

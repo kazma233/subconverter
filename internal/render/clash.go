@@ -296,6 +296,8 @@ func renderProxy(p *model.Proxy, cfg *Config) (*yaml.Node, error) {
 		return renderHysteria2(p, cfg), nil
 	case model.TypeAnyTLS:
 		return renderAnyTLS(p, cfg), nil
+	case model.TypeSnell:
+		return renderSnell(p, cfg), nil
 	default:
 		return nil, fmt.Errorf("不支持的协议类型 %v", p.Type)
 	}
@@ -424,6 +426,30 @@ func renderAnyTLS(p *model.Proxy, cfg *Config) *yaml.Node {
 	setStr(m, "client-fingerprint", p.ClientFingerprint)
 	setTriBoolTrue(m, "skip-cert-verify", p.SkipCertVerify)
 	setALPN(m, p.ALPN)
+	setUDP(m, p.UDP)
+	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
+	return m
+}
+
+// renderSnell 渲染 snell 节点，字段对齐 mihomo：psk / version / obfs-opts.{mode,host}。
+// C++ 版不输出 udp、跳过 version≥4 是旧 clash premium 的限制；mihomo 支持 v4 且 v3+ 支持 udp，
+// 本版照常输出。snell 基于 PSK 加密而非 TLS，不输出 sni/alpn/skip-cert-verify。
+func renderSnell(p *model.Proxy, cfg *Config) *yaml.Node {
+	m := mapNode()
+	setStr(m, "name", p.Name)
+	setField(m, "type", strNode("snell"))
+	setStr(m, "server", p.Server)
+	setField(m, "port", intNode(p.Port))
+	setPasswordField(m, "psk", p.Password)
+	if p.SnellVersion != 0 {
+		setField(m, "version", intNode(p.SnellVersion))
+	}
+	if p.SnellObfs != "" {
+		oo := mapNode()
+		setStr(oo, "mode", p.SnellObfs)
+		setStr(oo, "host", p.SnellObfsHost)
+		setField(m, "obfs-opts", oo)
+	}
 	setUDP(m, p.UDP)
 	setTriBoolTrue(m, "fast-open", p.TCPFastOpen)
 	return m

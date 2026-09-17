@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -237,6 +238,26 @@ func sbOutboundAnyTLS(p *model.Proxy) map[string]any {
 		"password":    p.Password,
 	}
 	appendTLS(out, p, p.SkipCertVerify, nil)
+	return out
+}
+
+// sbOutboundSnell 渲染 snell 出站（sing-box 1.14.0 起支持）。
+// version 仅支持 4 / 6（入口已过滤其余版本）；HTTP 混淆 obfs_mode/obfs_host 仅 v4 有效。
+func sbOutboundSnell(p *model.Proxy) map[string]any {
+	out := map[string]any{
+		"type":        "snell",
+		"tag":         p.Name,
+		"server":      p.Server,
+		"server_port": p.Port,
+		"psk":         p.Password,
+		"version":     p.SnellVersion,
+	}
+	if p.SnellVersion == 4 && p.SnellObfs != "" && p.SnellObfs != "off" {
+		out["obfs_mode"] = p.SnellObfs
+		if p.SnellObfsHost != "" {
+			out["obfs_host"] = p.SnellObfsHost
+		}
+	}
 	return out
 }
 
@@ -494,6 +515,7 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 		cfg = &Config{}
 	}
 	sanitizeNodeNames(nodes)
+	nodes = filterSingBoxNodes(nodes)
 
 	nodeOutbounds, err := sbRenderNodeOutbounds(nodes)
 	if err != nil {
@@ -633,6 +655,22 @@ func RenderSingBox(nodes []model.Proxy, cfg *Config) (string, error) {
 	return string(blob) + "\n", nil
 }
 
+// filterSingBoxNodes 剔除 sing-box 无法表达的节点，返回新切片。
+// snell 自 1.14.0 起支持且仅支持 version 4/6，其余版本在入口整体剔除——
+// 组展开与 proxy selector 都引用完整节点列表，事后跳过会留下悬空 tag。
+func filterSingBoxNodes(nodes []model.Proxy) []model.Proxy {
+	out := make([]model.Proxy, 0, len(nodes))
+	for i := range nodes {
+		p := &nodes[i]
+		if p.Type == model.TypeSnell && p.SnellVersion != 4 && p.SnellVersion != 6 {
+			log.Printf("singbox 跳过 snell 节点 %q：version=%d，sing-box 仅支持 4/6", p.Name, p.SnellVersion)
+			continue
+		}
+		out = append(out, *p)
+	}
+	return out
+}
+
 // sbRenderNodeOutbounds 把所有节点渲染为出站消息数组。
 func sbRenderNodeOutbounds(nodes []model.Proxy) ([]json.RawMessage, error) {
 	var out []json.RawMessage
@@ -652,6 +690,8 @@ func sbRenderNodeOutbounds(nodes []model.Proxy) ([]json.RawMessage, error) {
 			m = sbOutboundAnyTLS(p)
 		case model.TypeHysteria2:
 			m = sbOutboundHysteria2(p)
+		case model.TypeSnell:
+			m = sbOutboundSnell(p)
 		default:
 			return nil, fmt.Errorf("singbox 暂不支持协议 %q（节点 %q）", p.Type, p.Name)
 		}

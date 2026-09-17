@@ -123,6 +123,8 @@ func proxyToLoonLine(p *model.Proxy) (string, bool) {
 		return loonVLESS(p)
 	case model.TypeAnyTLS:
 		return loonAnyTLS(p), true
+	case model.TypeSnell:
+		return loonSnell(p), true
 	default:
 		// 未知协议在解析层已被过滤，这里防御性跳过
 		return "", false
@@ -270,6 +272,25 @@ func loonAnyTLS(p *model.Proxy) string {
 	}
 	if p.SkipCertVerify != nil && *p.SkipCertVerify {
 		b.WriteString(",skip-cert-verify=true")
+	}
+	loonAppendTFO(&b, p)
+	return b.String()
+}
+
+// loonSnell Loon 3.x 语法（C++ proxyToLoon 未实现，本版按 Loon/Surge 风格补齐）：
+// snell,server,port,psk=...[,version=n][,obfs=http][,obfs-host=...]
+// psk 等 key=value 值按 Surge 语法原样输出，不加引号。
+func loonSnell(p *model.Proxy) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "snell,%s,%d,psk=%s", p.Server, p.Port, p.Password)
+	if p.SnellVersion != 0 {
+		fmt.Fprintf(&b, ",version=%d", p.SnellVersion)
+	}
+	if p.SnellObfs != "" && p.SnellObfs != "off" {
+		b.WriteString(",obfs=" + p.SnellObfs)
+		if p.SnellObfsHost != "" {
+			b.WriteString(",obfs-host=" + p.SnellObfsHost)
+		}
 	}
 	loonAppendTFO(&b, p)
 	return b.String()

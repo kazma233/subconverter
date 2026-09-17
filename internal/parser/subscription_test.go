@@ -198,6 +198,19 @@ proxies:
     port: 8443
     password: atpass
     sni: at.example.com
+  - name: snell节点
+    type: snell
+    server: 8.8.8.8
+    port: 6160
+    psk: 123456
+    version: 4
+    obfs-opts:
+      mode: http
+      host: bing.com
+  - name: snell无psk
+    type: snell
+    server: 9.9.9.9
+    port: 6160
   - name: 不支持的节点
     type: wireguard
     server: 7.7.7.7
@@ -207,8 +220,8 @@ proxies:
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	if len(nodes) != 6 {
-		t.Fatalf("节点数 = %d, want 6（wireguard 应被跳过）", len(nodes))
+	if len(nodes) != 7 {
+		t.Fatalf("节点数 = %d, want 7（wireguard 与缺 psk 的 snell 应被跳过）", len(nodes))
 	}
 
 	vm := nodes[0]
@@ -271,6 +284,14 @@ proxies:
 	at := nodes[5]
 	if at.Type != model.TypeAnyTLS || at.Password != "atpass" || at.SNI != "at.example.com" {
 		t.Errorf("anytls 节点字段错误: %+v", at)
+	}
+
+	sn := nodes[6]
+	if sn.Type != model.TypeSnell || sn.Password != "123456" {
+		t.Errorf("snell 节点字段错误: %+v", sn)
+	}
+	if sn.SnellVersion != 4 || sn.SnellObfs != "http" || sn.SnellObfsHost != "bing.com" {
+		t.Errorf("snell version/obfs 字段错误: %+v", sn)
 	}
 }
 

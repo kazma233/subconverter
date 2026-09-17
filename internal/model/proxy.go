@@ -15,6 +15,7 @@ const (
 	TypeTrojan              // trojan
 	TypeHysteria2           // hysteria2 / hy2
 	TypeAnyTLS              // anytls
+	TypeSnell               // snell（Surge 私有协议）
 )
 
 // String 返回协议类型的可读名称，与 Clash.Meta（mihomo）节点 type 字段取值一致。
@@ -32,6 +33,8 @@ func (t ProxyType) String() string {
 		return "hysteria2"
 	case TypeAnyTLS:
 		return "anytls"
+	case TypeSnell:
+		return "snell"
 	default:
 		return "unknown"
 	}
@@ -66,7 +69,7 @@ type Proxy struct {
 	AlterID  int
 	Security string // 加密方式：auto / aes-128-gcm / chacha20-poly1305 ...
 
-	// SS / Trojan / AnyTLS
+	// SS / Trojan / AnyTLS / Snell
 	Cipher   string
 	Password string
 
@@ -92,6 +95,11 @@ type Proxy struct {
 	Hysteria2DownMbps     int    // 下行速率 mbps
 	Hysteria2CWND         int    // 拥塞窗口（packet 数）
 	Hysteria2HopInterval  int    // 端口跳跃间隔（秒）；sing-box 渲染时自动补 "s" 后缀
+
+	// Snell
+	SnellVersion  int    // 协议版本；0 = 未指定（Clash 侧可缺省，sing-box 侧仅支持 4/6）
+	SnellObfs     string // 混淆模式：http / off
+	SnellObfsHost string // 混淆伪装域名（obfs-opts.host）
 }
 
 // BoolPtr 返回 bool 的指针，用于三态字段赋值。

@@ -231,6 +231,66 @@ func TestRenderSingBoxLoadBalanceAndUnknownRuleTarget(t *testing.T) {
 }
 
 // TestRenderSingBox_NodeList 仅输出 outbounds 数组，无顶层包裹
+// TestRenderSingBoxSnell snell v4 正常输出；v2 被入口过滤（sing-box 仅支持 4/6），
+// 且 proxy selector 不再引用被过滤节点（无悬空 tag）。
+func TestRenderSingBoxSnell(t *testing.T) {
+	nodes := []model.Proxy{
+		{
+			Type: model.TypeSnell, Name: "snell-v4", Server: "8.8.4.4", Port: 6160,
+			Password: "pskpass", SnellVersion: 4, SnellObfs: "http", SnellObfsHost: "bing.com",
+		},
+		{
+			Type: model.TypeSnell, Name: "snell-v2", Server: "8.8.8.8", Port: 6160,
+			Password: "pskpass", SnellVersion: 2,
+		},
+	}
+	out, err := RenderSingBox(nodes, &Config{})
+	if err != nil {
+		t.Fatalf("RenderSingBox 失败: %v", err)
+	}
+	var root singBoxConfig
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("sing-box JSON 反序列化失败: %v", err)
+	}
+
+	var snell4 map[string]any
+	for _, raw := range root.Outbounds {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err == nil && m["type"] == "snell" {
+			snell4 = m
+			break
+		}
+	}
+	if snell4 == nil {
+		t.Fatal("未找到 snell outbound")
+	}
+	if snell4["psk"] != "pskpass" || snell4["version"].(float64) != 4 {
+		t.Errorf("snell psk/version 错误: %v", snell4)
+	}
+	if snell4["obfs_mode"] != "http" || snell4["obfs_host"] != "bing.com" {
+		t.Errorf("snell v4 应输出 obfs_mode/obfs_host: %v", snell4)
+	}
+
+	// v2 节点应被剔除：无对应 tag，proxy selector 也不引用
+	if strings.Contains(out, `"snell-v2"`) {
+		t.Errorf("snell v2 节点应被过滤，不应出现在任何 tag 引用中:\n%s", out)
+	}
+	var selOutbounds []string
+	for _, raw := range root.Outbounds {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err == nil && m["type"] == "selector" && m["tag"] == "proxy" {
+			for _, v := range m["outbounds"].([]any) {
+				selOutbounds = append(selOutbounds, v.(string))
+			}
+		}
+	}
+	for _, tag := range selOutbounds {
+		if tag == "snell-v2" {
+			t.Errorf("proxy selector 不应引用被过滤的 snell-v2: %v", selOutbounds)
+		}
+	}
+}
+
 func TestRenderSingBox_NodeList(t *testing.T) {
 	nodes := buildSingTestNodes()
 	out, err := RenderSingBox(nodes, &Config{NodeList: true})
