@@ -155,7 +155,7 @@ func (c *Client) fetchOnce(parent context.Context, rawURL, ua, proxy string) (st
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, normalizeFetchError(ctx, err)
+		return "", nil, normalizeFetchError(ctx, err, rawURL)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -167,7 +167,7 @@ func (c *Client) fetchOnce(parent context.Context, rawURL, ua, proxy string) (st
 			return "", nil, err
 		}
 		if !strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
-			return "", nil, normalizeFetchError(ctx, err)
+			return "", nil, normalizeFetchError(ctx, err, rawURL)
 		}
 		return "", nil, fmt.Errorf("下载响应解压失败")
 	}
@@ -309,7 +309,8 @@ func acquireDownload(ctx context.Context) error {
 	case downloadSlots <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		return normalizeFetchError(ctx, ctx.Err())
+		// 等待槽位时只可能是取消/超时，无 URL 可脱敏。
+		return normalizeFetchError(ctx, ctx.Err(), "")
 	}
 }
 
@@ -317,7 +318,9 @@ func releaseDownload() {
 	<-downloadSlots
 }
 
-func normalizeFetchError(ctx context.Context, err error) error {
+// normalizeFetchError 把传输层错误映射为可直接返回客户端的文本。rawURL 用于脱敏
+// 底层原因中可能出现的完整 URL（query 可能携带订阅 token）。
+func normalizeFetchError(ctx context.Context, err error, rawURL string) error {
 	var addressErr *AddressError
 	if errors.As(err, &addressErr) {
 		return addressErr
@@ -328,7 +331,17 @@ func normalizeFetchError(ctx context.Context, err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return fmt.Errorf("下载已取消")
 	}
-	return fmt.Errorf("下载失败")
+	return fmt.Errorf("下载失败：%s", underlyingFetchReason(err, rawURL))
+}
+
+// underlyingFetchReason 提取传输层错误的底层原因。url.Error 的文本含完整 URL
+// （query 可能携带订阅 token），因此重组为 host + 内层错误；其余错误做字符串脱敏兜底。
+func underlyingFetchReason(err error, rawURL string) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Sprintf("%s %s: %v", strings.ToLower(urlErr.Op), URLLabel(urlErr.URL), urlErr.Err)
+	}
+	return RedactURL(err.Error(), rawURL)
 }
 
 // URLLabel 只返回 URL 的 host，供日志与错误上下文使用，避免 URL query 中的凭据泄露。

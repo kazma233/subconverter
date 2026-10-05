@@ -258,6 +258,48 @@ func TestFetchSubscriptionTimeout(t *testing.T) {
 	}
 }
 
+// TestFetchSubscriptionSurfacesUnderlyingError 拨号失败时错误文本应保留底层原因，
+// 且不泄露 URL query 中的订阅凭据。
+func TestFetchSubscriptionSurfacesUnderlyingError(t *testing.T) {
+	client := NewClient(ClientOptions{
+		LookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+		},
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial tcp 1.2.3.4:443: connect: connection refused")
+		},
+	})
+	_, _, err := client.FetchSubscription(context.Background(), "https://sub.example.com/link?token=hidden", "", "")
+	if err == nil {
+		t.Fatal("拨号失败应报错")
+	}
+	for _, want := range []string{"下载失败：", "sub.example.com", "connection refused"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误应包含 %q, got %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "token=hidden") || strings.Contains(err.Error(), "https://") {
+		t.Errorf("错误不应泄露 URL query: %v", err)
+	}
+}
+
+// TestFetchSubscriptionSurfacesBodyReadError 响应体不完整（非 url.Error 路径）也应保留底层原因。
+func TestFetchSubscriptionSurfacesBodyReadError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("short"))
+	}))
+	defer srv.Close()
+
+	_, _, err := testClient().FetchSubscription(context.Background(), srv.URL, "", "")
+	if err == nil {
+		t.Fatal("响应体不完整应报错")
+	}
+	if !strings.Contains(err.Error(), "下载失败：") {
+		t.Errorf("错误应保留底层原因, got %v", err)
+	}
+}
+
 func TestClientRejectsUnsafeAddresses(t *testing.T) {
 	cases := []struct {
 		name, rawURL, want string
